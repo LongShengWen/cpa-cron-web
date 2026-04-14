@@ -178,7 +178,7 @@ export function classifyAccountState(
   quotaDisableThreshold: number
 ): Record<string, unknown> {
   const invalid401 =
-    !!record.unavailable || record.api_status_code === 401;
+    record.api_status_code === 401;
 
   const { limitReached, allowed, source } = resolveQuotaSignal(record);
   const { ratio: effectiveRatio, source: ratioSource } = resolveQuotaRemainingRatio(record);

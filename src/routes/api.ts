@@ -21,6 +21,7 @@ import {
   getRecentTasks,
   getTaskById,
   createTask,
+  requestTaskCancellation,
   updateTask,
   clearFinishedTasks,
   clearFinishedTasksOlderThanDays,
@@ -388,6 +389,44 @@ api.get('/tasks/:id', async (c) => {
   const task = await getTaskById(c.env.DB, id);
   if (!task) return c.json({ error: '任务不存在' }, 404);
   return c.json(task);
+});
+
+api.post('/tasks/:id/cancel', async (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  if (!Number.isFinite(id) || id < 1) {
+    return c.json({ error: '任务ID无效' }, 400);
+  }
+
+  const stopReason = '用户手动停止任务';
+  const result = await requestTaskCancellation(c.env.DB, id, stopReason);
+  if (!result.found) {
+    return c.json({ error: '任务不存在' }, 404);
+  }
+
+  if (!result.cancel_requested && result.status !== 'cancelled') {
+    return c.json({
+      error: `任务当前状态为 ${result.status}，无法停止`,
+      status: result.status,
+      type: result.type,
+    }, 409);
+  }
+
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+  const detail = result.cancelled_immediately
+    ? `任务已直接停止: id=${id} type=${result.type || '-'} status=cancelled`
+    : `任务已发出停止请求: id=${id} type=${result.type || '-'} current_status=${result.status}`;
+  await logActivity(c.env.DB, 'cancel_task', detail, username);
+
+  return c.json({
+    ok: true,
+    task_id: id,
+    status: result.status,
+    type: result.type,
+    cancel_requested: result.cancel_requested,
+    cancelled_immediately: result.cancelled_immediately,
+    message: result.cancelled_immediately ? '任务已停止' : '已发送停止请求，当前批次结束后会安全停止',
+  });
 });
 
 export default api;

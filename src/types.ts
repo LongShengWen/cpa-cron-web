@@ -117,6 +117,9 @@ export interface TaskRecord {
   progress: number;
   total: number;
   error: string | null;
+  cancel_requested?: number;
+  cancel_requested_at?: string | null;
+  cancel_reason?: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

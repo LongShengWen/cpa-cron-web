@@ -18,6 +18,7 @@ const AUTH_ACCOUNT_COLUMNS = [
 ];
 
 const DELETE_CHUNK_SIZE = 200;
+const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
 
 function parseStoredTime(value: unknown): number | null {
   if (typeof value !== 'string') return null;
@@ -480,6 +481,22 @@ export async function getTaskById(db: D1Database, id: number): Promise<Record<st
   return (await db.prepare('SELECT * FROM task_queue WHERE id = ?').bind(id).first()) as Record<string, unknown> | null;
 }
 
+export async function getTaskControlState(
+  db: D1Database,
+  id: number
+): Promise<{ id: number; type: string; status: string; cancel_requested: number; cancel_reason: string | null } | null> {
+  return (await db
+    .prepare('SELECT id, type, status, cancel_requested, cancel_reason FROM task_queue WHERE id = ?')
+    .bind(id)
+    .first()) as {
+      id: number;
+      type: string;
+      status: string;
+      cancel_requested: number;
+      cancel_reason: string | null;
+    } | null;
+}
+
 export async function createTask(
   db: D1Database,
   type: string,
@@ -521,7 +538,7 @@ export async function getRecentTasks(
 
 export async function clearFinishedTasks(db: D1Database): Promise<number> {
   const result = await db
-    .prepare("DELETE FROM task_queue WHERE status IN ('completed', 'failed')")
+    .prepare(`DELETE FROM task_queue WHERE status IN (${TERMINAL_TASK_STATUSES.map((status) => `'${status}'`).join(', ')})`)
     .run();
   return Number(result.meta.changes || 0);
 }
@@ -532,7 +549,7 @@ export async function clearFinishedTasksOlderThanDays(
 ): Promise<number> {
   const cutoff = getCutoffTimestamp(keepDays);
   const rows = await db
-    .prepare("SELECT id, finished_at, created_at FROM task_queue WHERE status IN ('completed', 'failed')")
+    .prepare(`SELECT id, finished_at, created_at FROM task_queue WHERE status IN (${TERMINAL_TASK_STATUSES.map((status) => `'${status}'`).join(', ')})`)
     .all<{ id: number; finished_at: string | null; created_at: string | null }>();
   const ids = rows.results
     .filter((row) => {
@@ -542,4 +559,98 @@ export async function clearFinishedTasksOlderThanDays(
     .map((row) => Number(row.id))
     .filter((id) => Number.isFinite(id));
   return deleteRowsByIds(db, 'task_queue', 'id', ids);
+}
+
+export async function requestTaskCancellation(
+  db: D1Database,
+  id: number,
+  reason: string
+): Promise<{
+  found: boolean;
+  status: string | null;
+  type: string | null;
+  cancel_requested: boolean;
+  cancelled_immediately: boolean;
+}> {
+  const task = await getTaskControlState(db, id);
+  if (!task) {
+    return {
+      found: false,
+      status: null,
+      type: null,
+      cancel_requested: false,
+      cancelled_immediately: false,
+    };
+  }
+
+  const status = String(task.status || '').trim().toLowerCase();
+  if (status === 'cancelled') {
+    return {
+      found: true,
+      status: 'cancelled',
+      type: String(task.type || ''),
+      cancel_requested: true,
+      cancelled_immediately: false,
+    };
+  }
+
+  if (status === 'completed' || status === 'failed') {
+    return {
+      found: true,
+      status,
+      type: String(task.type || ''),
+      cancel_requested: false,
+      cancelled_immediately: false,
+    };
+  }
+
+  const now = new Date().toISOString();
+  if (status === 'pending') {
+    await updateTask(db, id, {
+      status: 'cancelled',
+      cancel_requested: 1,
+      cancel_requested_at: now,
+      cancel_reason: reason,
+      error: reason,
+      finished_at: now,
+    });
+    return {
+      found: true,
+      status: 'cancelled',
+      type: String(task.type || ''),
+      cancel_requested: true,
+      cancelled_immediately: true,
+    };
+  }
+
+  await updateTask(db, id, {
+    cancel_requested: 1,
+    cancel_requested_at: now,
+    cancel_reason: reason,
+  });
+  return {
+    found: true,
+    status,
+    type: String(task.type || ''),
+    cancel_requested: true,
+    cancelled_immediately: false,
+  };
+}
+
+export async function markTaskCancelled(
+  db: D1Database,
+  id: number,
+  reason: string,
+  result?: string | null
+): Promise<void> {
+  const now = new Date().toISOString();
+  await updateTask(db, id, {
+    status: 'cancelled',
+    cancel_requested: 1,
+    cancel_requested_at: now,
+    cancel_reason: reason,
+    error: reason,
+    finished_at: now,
+    ...(result !== undefined ? { result } : {}),
+  });
 }
