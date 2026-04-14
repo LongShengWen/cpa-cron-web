@@ -804,7 +804,6 @@ export function historyPage(): string {
   return htmlLayout('扫描历史', `
 <div class="table-wrapper" style="margin-bottom:16px">
   <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <strong>历史清理工具</strong>
     <span style="font-size:12px;color:var(--text-dim)">支持一键清空全部历史，或按天数保留最近记录。这里的“全部历史”包含扫描历史、操作日志、已完成/失败任务，不影响账号主数据。</span>
   </div>
   <div style="padding:16px 20px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
@@ -819,7 +818,7 @@ export function historyPage(): string {
 </div>
 <div class="table-wrapper">
   <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <strong>扫描运行记录</strong>
+    <strong>扫描运行记录 / 历史清理工具</strong>
     <span style="font-size:12px;color:var(--text-dim)">支持清空扫描历史，并可顺手清理已完成/失败的任务记录，运行中的任务不会被删除。</span>
     <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn btn-outline btn-sm" onclick="cleanupScanRunsByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧扫描历史</button>
