@@ -184,7 +184,8 @@ export function classifyAccountState(
   const { ratio: effectiveRatio, source: ratioSource } = resolveQuotaRemainingRatio(record);
 
   const thresholdTriggered =
-    quotaDisableThreshold > 0 &&
+    Number.isFinite(quotaDisableThreshold) &&
+    quotaDisableThreshold >= 0 &&
     effectiveRatio != null &&
     effectiveRatio <= quotaDisableThreshold;
 
