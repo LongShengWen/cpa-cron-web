@@ -33,6 +33,16 @@ function parseBool(val: string): boolean {
   return ['true', '1', 'yes', 'on'].includes(val.toLowerCase().trim());
 }
 
+function parseIntOrDefault(val: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt((val || '').trim(), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseFloatOrDefault(val: string | undefined, fallback: number): number {
+  const parsed = Number.parseFloat((val || '').trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export async function loadConfig(db: D1Database, env?: Env): Promise<AppConfig> {
   const rows = await db.prepare('SELECT key, value FROM app_config').all<{ key: string; value: string }>();
   const map = new Map<string, string>();
@@ -48,21 +58,21 @@ export async function loadConfig(db: D1Database, env?: Env): Promise<AppConfig> 
     token: (map.get('token') || envToken || '').trim(),
     target_type: (map.get('target_type') || 'codex').trim(),
     provider: (map.get('provider') || '').trim(),
-    probe_workers: parseInt(map.get('probe_workers') || '100', 10),
-    action_workers: parseInt(map.get('action_workers') || '100', 10),
-    timeout: parseInt(map.get('timeout') || '15', 10),
-    retries: parseInt(map.get('retries') || '3', 10),
-    delete_retries: parseInt(map.get('delete_retries') || '2', 10),
+    probe_workers: parseIntOrDefault(map.get('probe_workers'), 100),
+    action_workers: parseIntOrDefault(map.get('action_workers'), 100),
+    timeout: parseIntOrDefault(map.get('timeout'), 15),
+    retries: parseIntOrDefault(map.get('retries'), 3),
+    delete_retries: parseIntOrDefault(map.get('delete_retries'), 2),
     quota_action: (map.get('quota_action') || 'disable') as 'disable' | 'delete',
-    quota_disable_threshold: parseFloat(map.get('quota_disable_threshold') || '0'),
+    quota_disable_threshold: parseFloatOrDefault(map.get('quota_disable_threshold'), 0),
     delete_401: parseBool(map.get('delete_401') || 'true'),
     auto_reenable: parseBool(map.get('auto_reenable') || 'true'),
     reenable_scope: (map.get('reenable_scope') || 'signal') as 'signal' | 'managed',
-    upload_workers: parseInt(map.get('upload_workers') || '20', 10),
-    upload_retries: parseInt(map.get('upload_retries') || '2', 10),
+    upload_workers: parseIntOrDefault(map.get('upload_workers'), 20),
+    upload_retries: parseIntOrDefault(map.get('upload_retries'), 2),
     upload_method: (map.get('upload_method') || 'json') as 'json' | 'multipart',
     upload_force: parseBool(map.get('upload_force') || 'false'),
-    min_valid_accounts: parseInt(map.get('min_valid_accounts') || '100', 10),
+    min_valid_accounts: parseIntOrDefault(map.get('min_valid_accounts'), 100),
     refill_strategy: (map.get('refill_strategy') || 'to-threshold') as 'to-threshold' | 'fixed',
     user_agent: (map.get('user_agent') || 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal').trim(),
   };
@@ -88,12 +98,12 @@ export function validateConfig(config: AppConfig): string[] {
   if (!config.base_url) errors.push('base_url 不能为空');
   if (!config.token) errors.push('token 不能为空');
   if (!config.target_type) errors.push('target_type 不能为空');
-  if (config.probe_workers < 1) errors.push('probe_workers 必须 >= 1');
-  if (config.action_workers < 1) errors.push('action_workers 必须 >= 1');
-  if (config.timeout < 1) errors.push('timeout 必须 >= 1');
-  if (config.retries < 0) errors.push('retries 不能小于 0');
-  if (config.delete_retries < 0) errors.push('delete_retries 不能小于 0');
-  if (config.quota_disable_threshold < 0 || config.quota_disable_threshold > 1) {
+  if (!Number.isFinite(config.probe_workers) || config.probe_workers < 1) errors.push('probe_workers 必须 >= 1');
+  if (!Number.isFinite(config.action_workers) || config.action_workers < 1) errors.push('action_workers 必须 >= 1');
+  if (!Number.isFinite(config.timeout) || config.timeout < 1) errors.push('timeout 必须 >= 1');
+  if (!Number.isFinite(config.retries) || config.retries < 0) errors.push('retries 不能小于 0');
+  if (!Number.isFinite(config.delete_retries) || config.delete_retries < 0) errors.push('delete_retries 不能小于 0');
+  if (!Number.isFinite(config.quota_disable_threshold) || config.quota_disable_threshold < 0 || config.quota_disable_threshold > 1) {
     errors.push('quota_disable_threshold 必须在 0~1 之间');
   }
   if (!['disable', 'delete'].includes(config.quota_action)) {
@@ -102,8 +112,11 @@ export function validateConfig(config: AppConfig): string[] {
   if (!['signal', 'managed'].includes(config.reenable_scope)) {
     errors.push('reenable_scope 只能是 signal 或 managed');
   }
-  if (config.upload_workers < 1) errors.push('upload_workers 必须 >= 1');
-  if (config.upload_retries < 0) errors.push('upload_retries 不能小于 0');
+  if (!Number.isFinite(config.upload_workers) || config.upload_workers < 1) errors.push('upload_workers 必须 >= 1');
+  if (!Number.isFinite(config.upload_retries) || config.upload_retries < 0) errors.push('upload_retries 不能小于 0');
+  if (!Number.isFinite(config.min_valid_accounts) || config.min_valid_accounts < 0) errors.push('min_valid_accounts 不能小于 0');
+  if (!['json', 'multipart'].includes(config.upload_method)) errors.push('upload_method 只能是 json 或 multipart');
+  if (!['to-threshold', 'fixed'].includes(config.refill_strategy)) errors.push('refill_strategy 只能是 to-threshold 或 fixed');
   return errors;
 }
 

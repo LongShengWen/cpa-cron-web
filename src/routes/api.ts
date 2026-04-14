@@ -12,12 +12,18 @@ import {
   deleteAccountFromDB,
   updateAccountDisabledState,
   getScanRuns,
+  clearScanRuns,
+  clearScanRunsOlderThanDays,
   getActivityLog,
+  clearActivityLog,
+  clearActivityLogOlderThanDays,
   logActivity,
   getRecentTasks,
   getTaskById,
   createTask,
   updateTask,
+  clearFinishedTasks,
+  clearFinishedTasksOlderThanDays,
 } from '../core/db';
 import { runScan, runMaintain, runUpload } from '../core/engine';
 import type { UploadFileItem } from '../core/engine';
@@ -293,6 +299,72 @@ api.get('/scan-runs', async (c) => {
   const offset = parseInt(c.req.query('offset') || '0', 10);
   const result = await getScanRuns(c.env.DB, limit, offset);
   return c.json(result);
+});
+
+api.post('/history/cleanup', async (c) => {
+  const body = await c.req.json<{ scope?: string; keep_days?: number | string }>().catch(() => null);
+  const scope = String(body?.scope || 'scan_runs');
+  const keepDaysRaw = body?.keep_days;
+  const keepDays = keepDaysRaw == null || keepDaysRaw === ''
+    ? null
+    : Number.parseInt(String(keepDaysRaw), 10);
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+
+  if (!['scan_runs', 'activity_log', 'finished_tasks', 'all'].includes(scope)) {
+    return c.json({ error: '不支持的清理范围' }, 400);
+  }
+  if (keepDays != null && (!Number.isFinite(keepDays) || keepDays < 1)) {
+    return c.json({ error: 'keep_days 必须是大于等于 1 的整数' }, 400);
+  }
+
+  const result = {
+    scope,
+    keep_days: keepDays,
+    scan_runs: 0,
+    activity_log: 0,
+    finished_tasks: 0,
+  };
+
+  if (scope === 'scan_runs' || scope === 'all') {
+    result.scan_runs = keepDays != null
+      ? await clearScanRunsOlderThanDays(c.env.DB, keepDays)
+      : await clearScanRuns(c.env.DB);
+  }
+  if (scope === 'finished_tasks' || scope === 'all') {
+    result.finished_tasks = keepDays != null
+      ? await clearFinishedTasksOlderThanDays(c.env.DB, keepDays)
+      : await clearFinishedTasks(c.env.DB);
+  }
+  if (scope === 'activity_log' || scope === 'all') {
+    result.activity_log = keepDays != null
+      ? await clearActivityLogOlderThanDays(c.env.DB, keepDays)
+      : await clearActivityLog(c.env.DB);
+  }
+
+  const touchesActivityLog = scope === 'activity_log' || scope === 'all';
+  if (!touchesActivityLog) {
+    const actionName = keepDays != null ? 'cleanup_history_retention' : `cleanup_${scope}`;
+    const detail = keepDays != null
+      ? `按天数清理历史: scope=${scope} keep_days=${keepDays} | 扫描历史=${result.scan_runs} | 操作日志=${result.activity_log} | 已完成任务=${result.finished_tasks}`
+      : scope === 'scan_runs'
+        ? `清理扫描历史: 删除 ${result.scan_runs} 条`
+        : scope === 'finished_tasks'
+          ? `清理已完成任务: 删除 ${result.finished_tasks} 条`
+          : `清理历史: scope=${scope}`;
+    await logActivity(c.env.DB, actionName, detail, username);
+  }
+
+  const actionLabel = keepDays != null ? `已清理 ${keepDays} 天前历史` : '已清理';
+  return c.json({
+    ok: true,
+    ...result,
+    message: [
+      scope === 'scan_runs' || scope === 'all' ? `扫描历史 ${result.scan_runs} 条` : '',
+      scope === 'activity_log' || scope === 'all' ? `操作日志 ${result.activity_log} 条` : '',
+      scope === 'finished_tasks' || scope === 'all' ? `已完成任务 ${result.finished_tasks} 条` : '',
+    ].filter(Boolean).join('，') + ` ${actionLabel}`,
+  });
 });
 
 // ── Activity Log ─────────────────────────────────────────────────────

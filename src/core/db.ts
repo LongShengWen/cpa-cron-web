@@ -17,6 +17,43 @@ const AUTH_ACCOUNT_COLUMNS = [
   'last_seen_at', 'last_probed_at', 'updated_at',
 ];
 
+const DELETE_CHUNK_SIZE = 200;
+
+function parseStoredTime(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+    ? raw.replace(' ', 'T') + 'Z'
+    : raw;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+async function deleteRowsByIds(
+  db: D1Database,
+  table: string,
+  idColumn: string,
+  ids: number[]
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  let deleted = 0;
+  for (let i = 0; i < ids.length; i += DELETE_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + DELETE_CHUNK_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const result = await db
+      .prepare(`DELETE FROM ${table} WHERE ${idColumn} IN (${placeholders})`)
+      .bind(...chunk)
+      .run();
+    deleted += Number(result.meta.changes || 0);
+  }
+  return deleted;
+}
+
+function getCutoffTimestamp(keepDays: number): number {
+  return Date.now() - keepDays * 24 * 60 * 60 * 1000;
+}
+
 export async function upsertAuthAccounts(
   db: D1Database,
   rows: Record<string, unknown>[]
@@ -131,6 +168,29 @@ export async function getScanRuns(
     .bind(limit, offset)
     .all();
   return { rows: result.results as Record<string, unknown>[], total };
+}
+
+export async function clearScanRuns(db: D1Database): Promise<number> {
+  const result = await db.prepare('DELETE FROM scan_runs').run();
+  return Number(result.meta.changes || 0);
+}
+
+export async function clearScanRunsOlderThanDays(
+  db: D1Database,
+  keepDays: number
+): Promise<number> {
+  const cutoff = getCutoffTimestamp(keepDays);
+  const rows = await db
+    .prepare('SELECT run_id, finished_at, started_at FROM scan_runs')
+    .all<{ run_id: number; finished_at: string | null; started_at: string | null }>();
+  const ids = rows.results
+    .filter((row) => {
+      const timestamp = parseStoredTime(row.finished_at) ?? parseStoredTime(row.started_at);
+      return timestamp != null && timestamp < cutoff;
+    })
+    .map((row) => Number(row.run_id))
+    .filter((id) => Number.isFinite(id));
+  return deleteRowsByIds(db, 'scan_runs', 'run_id', ids);
 }
 
 export async function getAccounts(
@@ -314,22 +374,38 @@ export async function getDashboardStats(db: D1Database): Promise<Record<string, 
   const cronCompleted = ((stats[10].results as Record<string, unknown>[])[0]?.created_at as string | undefined) ?? null;
   const cronFailed = ((stats[11].results as Record<string, unknown>[])[0]?.created_at as string | undefined) ?? null;
 
+  const parseDbTime = (value: string | null): number | null => {
+    if (!value) return null;
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? value.replace(' ', 'T') + 'Z'
+      : value;
+    const timestamp = Date.parse(normalized);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+
+  const cronStartedMs = parseDbTime(cronStarted);
+  const cronCompletedMs = parseDbTime(cronCompleted);
+  const cronFailedMs = parseDbTime(cronFailed);
+
   let cronDurationSeconds: number | null = null;
-  if (cronStarted && cronCompleted) {
-    const startMs = Date.parse(cronStarted.replace(' ', 'T') + 'Z');
-    const endMs = Date.parse(cronCompleted.replace(' ', 'T') + 'Z');
-    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
-      cronDurationSeconds = Math.round((endMs - startMs) / 1000);
-    }
+  if (cronStartedMs != null && cronCompletedMs != null && cronCompletedMs >= cronStartedMs) {
+    cronDurationSeconds = Math.round((cronCompletedMs - cronStartedMs) / 1000);
   }
 
   let cronStatus: 'success' | 'failed' | 'running' | 'never' = 'never';
-  if (cronCompleted) {
-    cronStatus = 'success';
-  } else if (cronFailed) {
-    cronStatus = 'failed';
-  } else if (cronStarted) {
-    cronStatus = 'running';
+  const latestCronEvent = Math.max(
+    cronStartedMs ?? Number.NEGATIVE_INFINITY,
+    cronCompletedMs ?? Number.NEGATIVE_INFINITY,
+    cronFailedMs ?? Number.NEGATIVE_INFINITY
+  );
+  if (latestCronEvent !== Number.NEGATIVE_INFINITY) {
+    if (cronCompletedMs != null && latestCronEvent === cronCompletedMs) {
+      cronStatus = 'success';
+    } else if (cronFailedMs != null && latestCronEvent === cronFailedMs) {
+      cronStatus = 'failed';
+    } else if (cronStartedMs != null) {
+      cronStatus = 'running';
+    }
   }
 
   return {
@@ -377,6 +453,29 @@ export async function getActivityLog(
   return { rows: result.results as Record<string, unknown>[], total };
 }
 
+export async function clearActivityLog(db: D1Database): Promise<number> {
+  const result = await db.prepare('DELETE FROM activity_log').run();
+  return Number(result.meta.changes || 0);
+}
+
+export async function clearActivityLogOlderThanDays(
+  db: D1Database,
+  keepDays: number
+): Promise<number> {
+  const cutoff = getCutoffTimestamp(keepDays);
+  const rows = await db
+    .prepare('SELECT id, created_at FROM activity_log')
+    .all<{ id: number; created_at: string | null }>();
+  const ids = rows.results
+    .filter((row) => {
+      const timestamp = parseStoredTime(row.created_at);
+      return timestamp != null && timestamp < cutoff;
+    })
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isFinite(id));
+  return deleteRowsByIds(db, 'activity_log', 'id', ids);
+}
+
 export async function getTaskById(db: D1Database, id: number): Promise<Record<string, unknown> | null> {
   return (await db.prepare('SELECT * FROM task_queue WHERE id = ?').bind(id).first()) as Record<string, unknown> | null;
 }
@@ -418,4 +517,29 @@ export async function getRecentTasks(
     .bind(limit)
     .all();
   return result.results as Record<string, unknown>[];
+}
+
+export async function clearFinishedTasks(db: D1Database): Promise<number> {
+  const result = await db
+    .prepare("DELETE FROM task_queue WHERE status IN ('completed', 'failed')")
+    .run();
+  return Number(result.meta.changes || 0);
+}
+
+export async function clearFinishedTasksOlderThanDays(
+  db: D1Database,
+  keepDays: number
+): Promise<number> {
+  const cutoff = getCutoffTimestamp(keepDays);
+  const rows = await db
+    .prepare("SELECT id, finished_at, created_at FROM task_queue WHERE status IN ('completed', 'failed')")
+    .all<{ id: number; finished_at: string | null; created_at: string | null }>();
+  const ids = rows.results
+    .filter((row) => {
+      const timestamp = parseStoredTime(row.finished_at) ?? parseStoredTime(row.created_at);
+      return timestamp != null && timestamp < cutoff;
+    })
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isFinite(id));
+  return deleteRowsByIds(db, 'task_queue', 'id', ids);
 }

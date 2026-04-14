@@ -802,8 +802,31 @@ function showResult(html) {
 
 export function historyPage(): string {
   return htmlLayout('扫描历史', `
+<div class="table-wrapper" style="margin-bottom:16px">
+  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <strong>历史清理工具</strong>
+    <span style="font-size:12px;color:var(--text-dim)">支持一键清空全部历史，或按天数保留最近记录。这里的“全部历史”包含扫描历史、操作日志、已完成/失败任务，不影响账号主数据。</span>
+  </div>
+  <div style="padding:16px 20px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+    <div class="form-group" style="margin:0;min-width:220px">
+      <label>保留最近天数</label>
+      <input type="number" id="historyKeepDays" style="width:100%" min="1" value="30">
+    </div>
+    <button class="btn btn-outline" onclick="cleanupAllHistoryByDays()"><span class="material-icons" style="font-size:16px">history</span> 按天数清理全部历史</button>
+    <button class="btn btn-danger" onclick="cleanupAllHistory()"><span class="material-icons" style="font-size:16px">delete_forever</span> 一键清空全部历史</button>
+    <span id="historyCleanupHint" style="font-size:12px;color:var(--text-dim)">建议先用“按天数清理”，需要彻底归零时再用“一键清空全部历史”。</span>
+  </div>
+</div>
 <div class="table-wrapper">
-  <div class="table-toolbar"><strong>扫描运行记录</strong></div>
+  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <strong>扫描运行记录</strong>
+    <span style="font-size:12px;color:var(--text-dim)">支持清空扫描历史，并可顺手清理已完成/失败的任务记录，运行中的任务不会被删除。</span>
+    <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="cleanupScanRunsByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧扫描历史</button>
+      <button class="btn btn-outline btn-sm" onclick="cleanupFinishedTasks()"><span class="material-icons" style="font-size:16px">task_alt</span> 清理已完成任务</button>
+      <button class="btn btn-danger btn-sm" onclick="cleanupScanRuns()"><span class="material-icons" style="font-size:16px">delete_sweep</span> 清空扫描历史</button>
+    </div>
+  </div>
   <table>
     <thead><tr><th>ID</th><th>模式</th><th>状态</th><th>总文件</th><th>过滤</th><th>探测</th><th>401</th><th>限额</th><th>恢复</th><th>开始时间</th><th>结束时间</th></tr></thead>
     <tbody id="historyBody"><tr><td colspan="11" style="text-align:center"><div class="spinner"></div></td></tr></tbody>
@@ -817,10 +840,30 @@ export function historyPage(): string {
 <script>
 let currentPage = 0, pageSize = 20, total = 0;
 function changePage(dir) { currentPage = Math.max(0, currentPage + dir); load(); }
+function getKeepDays() {
+  const el = document.getElementById('historyKeepDays');
+  const days = Number.parseInt(el.value, 10);
+  if (!Number.isFinite(days) || days < 1) {
+    alert('请填写大于等于 1 的保留天数');
+    el.focus();
+    return null;
+  }
+  return days;
+}
+function historyStatusBadge(status) {
+  if (status === 'success') return 'badge-success';
+  if (status === 'running') return 'badge-info';
+  if (status === 'skipped') return 'badge-warning';
+  return 'badge-danger';
+}
 async function load() {
   const data = await api(\`/scan-runs?limit=\${pageSize}&offset=\${currentPage*pageSize}\`);
   if (!data) return;
   total = data.total;
+  if (currentPage > 0 && currentPage * pageSize >= total) {
+    currentPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+    return load();
+  }
   document.getElementById('pageInfo').textContent = \`\${currentPage+1} / \${Math.max(1,Math.ceil(total/pageSize))}\`;
   document.getElementById('prevBtn').disabled = currentPage === 0;
   document.getElementById('nextBtn').disabled = (currentPage+1)*pageSize >= total;
@@ -829,7 +872,7 @@ async function load() {
   tbody.innerHTML = data.rows.map(r => \`
     <tr>
       <td>\${r.run_id}</td><td>\${r.mode}</td>
-      <td><span class="badge \${r.status==='success'?'badge-success':'badge-danger'}">\${r.status}</span></td>
+      <td><span class="badge \${historyStatusBadge(r.status)}">\${r.status}</span></td>
       <td>\${r.total_files}</td><td>\${r.filtered_files}</td><td>\${r.probed_files}</td>
       <td>\${r.invalid_401_count}</td><td>\${r.quota_limited_count}</td><td>\${r.recovered_count}</td>
       <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.started_at)}</td>
@@ -837,6 +880,44 @@ async function load() {
     </tr>
   \`).join('');
 }
+
+async function cleanupHistory(scope, confirmText, keepDays) {
+  if (!confirm(confirmText)) return;
+  const payload = { scope };
+  if (keepDays != null) payload.keep_days = keepDays;
+  const data = await api('/history/cleanup', { method: 'POST', body: JSON.stringify(payload) });
+  if (!data?.ok) {
+    alert(data?.error || '清理失败');
+    return;
+  }
+  if (window.showToast) window.showToast(data.message || '清理成功', 'success', 4000);
+  await load();
+}
+
+async function cleanupScanRuns() {
+  await cleanupHistory('scan_runs', '确认清空全部扫描历史吗？此操作不会删除账号数据，但会移除扫描运行记录。');
+}
+
+async function cleanupScanRunsByDays() {
+  const keepDays = getKeepDays();
+  if (keepDays == null) return;
+  await cleanupHistory('scan_runs', '确认删除 ' + keepDays + ' 天前的扫描历史吗？最近记录会保留。', keepDays);
+}
+
+async function cleanupFinishedTasks() {
+  await cleanupHistory('finished_tasks', '确认清理所有已完成/失败的任务记录吗？运行中任务不会受到影响。');
+}
+
+async function cleanupAllHistory() {
+  await cleanupHistory('all', '确认一键清空全部历史吗？这会删除扫描历史、操作日志、已完成/失败任务记录，且无法恢复。');
+}
+
+async function cleanupAllHistoryByDays() {
+  const keepDays = getKeepDays();
+  if (keepDays == null) return;
+  await cleanupHistory('all', '确认清理 ' + keepDays + ' 天前的全部历史吗？这会同时清理扫描历史、操作日志、已完成/失败任务记录。', keepDays);
+}
+
 load();
 </script>
 `, 'history');
@@ -845,7 +926,18 @@ load();
 export function activityPage(): string {
   return htmlLayout('操作日志', `
 <div class="table-wrapper">
-  <div class="table-toolbar"><strong>操作日志</strong></div>
+  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <strong>操作日志</strong>
+    <span style="font-size:12px;color:var(--text-dim)">可按需清空活动日志，也可以按天数只删除较早日志。</span>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div class="form-group" style="margin:0;min-width:160px">
+        <label>保留最近天数</label>
+        <input type="number" id="activityKeepDays" style="width:100%" min="1" value="30">
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="cleanupActivityLogByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧日志</button>
+      <button class="btn btn-danger btn-sm" onclick="cleanupActivityLog()"><span class="material-icons" style="font-size:16px">delete_sweep</span> 清空操作日志</button>
+    </div>
+  </div>
   <table>
     <thead><tr><th>ID</th><th>操作</th><th>详情</th><th>用户</th><th>时间</th></tr></thead>
     <tbody id="logBody"><tr><td colspan="5" style="text-align:center"><div class="spinner"></div></td></tr></tbody>
@@ -859,10 +951,24 @@ export function activityPage(): string {
 <script>
 let currentPage = 0, pageSize = 50, total = 0;
 function changePage(dir) { currentPage = Math.max(0, currentPage + dir); load(); }
+function getActivityKeepDays() {
+  const el = document.getElementById('activityKeepDays');
+  const days = Number.parseInt(el.value, 10);
+  if (!Number.isFinite(days) || days < 1) {
+    alert('请填写大于等于 1 的保留天数');
+    el.focus();
+    return null;
+  }
+  return days;
+}
 async function load() {
   const data = await api(\`/activity?limit=\${pageSize}&offset=\${currentPage*pageSize}\`);
   if (!data) return;
   total = data.total;
+  if (currentPage > 0 && currentPage*pageSize >= total) {
+    currentPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+    return load();
+  }
   document.getElementById('pageInfo').textContent = \`\${currentPage+1} / \${Math.max(1,Math.ceil(total/pageSize))}\`;
   document.getElementById('prevBtn').disabled = currentPage === 0;
   document.getElementById('nextBtn').disabled = (currentPage+1)*pageSize >= total;
@@ -878,6 +984,31 @@ async function load() {
     </tr>
   \`).join('');
 }
+
+async function cleanupActivityLog() {
+  if (!confirm('确认清空全部操作日志吗？清空后将无法从页面查看既往活动记录。')) return;
+  const data = await api('/history/cleanup', { method: 'POST', body: JSON.stringify({ scope: 'activity_log' }) });
+  if (!data?.ok) {
+    alert(data?.error || '清理失败');
+    return;
+  }
+  if (window.showToast) window.showToast(data.message || '清理成功', 'success', 4000);
+  await load();
+}
+
+async function cleanupActivityLogByDays() {
+  const keepDays = getActivityKeepDays();
+  if (keepDays == null) return;
+  if (!confirm('确认删除 ' + keepDays + ' 天前的操作日志吗？最近日志会保留。')) return;
+  const data = await api('/history/cleanup', { method: 'POST', body: JSON.stringify({ scope: 'activity_log', keep_days: keepDays }) });
+  if (!data?.ok) {
+    alert(data?.error || '清理失败');
+    return;
+  }
+  if (window.showToast) window.showToast(data.message || '清理成功', 'success', 4000);
+  await load();
+}
+
 load();
 </script>
 `, 'activity');
