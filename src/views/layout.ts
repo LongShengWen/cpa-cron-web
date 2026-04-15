@@ -1,3 +1,5 @@
+import { APP_ICON_LINK_TAGS } from './icon';
+
 export function htmlLayout(title: string, content: string, activeNav = ''): string {
   const navItems = [
     { href: '/', label: '仪表盘', icon: 'dashboard', id: 'dashboard' },
@@ -21,6 +23,7 @@ export function htmlLayout(title: string, content: string, activeNav = ''): stri
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title} - cpa-cron-web</title>
+${APP_ICON_LINK_TAGS}
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <style>
 :root {
@@ -158,7 +161,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 <aside class="sidebar">
   <div class="sidebar-header">
     <h1>cpa-cron-web</h1>
-    <p>v1.0 | Web Management</p>
+    <p>v1.1 | Web Management</p>
   </div>
   <nav class="sidebar-nav">
     ${navHtml}
@@ -260,6 +263,7 @@ export function loginPage(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>登录 - cpa-cron-web</title>
+${APP_ICON_LINK_TAGS}
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <style>
 :root { --bg: #0f1117; --bg-card: #1a1d27; --border: #2a2e3d; --text: #e4e6eb; --text-dim: #8b8fa3; --primary: #6c5ce7; --primary-hover: #7c6df7; --danger: #e74c3c; --radius: 8px; }

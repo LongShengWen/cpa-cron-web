@@ -117,6 +117,53 @@ npm run dev
 
 这些配置决定扫描、维护和上传时如何连接你的 CPA 管理接口。
 
+### 历史保留策略
+
+当前版本默认**仅保留最近 1 天历史数据**，包含：
+
+- 扫描历史 `scan_runs`
+- 操作日志 `activity_log`
+- 已完成 / 失败任务记录 `task_queue`
+
+说明：
+
+- 运行中的任务不会被自动删除
+- 自动清理是在系统写入新历史时顺带执行，不是单独起一个清理 Worker
+- 页面中的“保留天数”输入框用于手动清理历史，默认值也是 `1`
+
+#### 如何修改保留天数
+
+当前版本的保留天数**不是通过 Cloudflare Dashboard / `wrangler.toml` 变量配置**，而是写在代码里。
+
+位置：
+
+- `src/core/db.ts`
+
+当前默认值：
+
+```ts
+const HISTORY_RETENTION_DAYS = 1;
+const ACTIVITY_LOG_RETENTION_DAYS = 1;
+```
+
+如果你想改成保留 7 天，可以改为：
+
+```ts
+const HISTORY_RETENTION_DAYS = 7;
+const ACTIVITY_LOG_RETENTION_DAYS = 7;
+```
+
+修改后重新部署：
+
+```bash
+npm run deploy
+```
+
+#### 如果想改成 Cloudflare 可配置
+
+当前项目还没有把历史保留天数接到 CF 环境变量。  
+如果后续需要支持在 Cloudflare Dashboard 中直接修改，可以再把它扩展为 `vars` 或 Secret 读取模式。
+
 ## Cloudflare 部署
 
 ### 1. 创建资源
