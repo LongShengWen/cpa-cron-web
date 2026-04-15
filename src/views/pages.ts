@@ -283,7 +283,8 @@ export function accountsPage(initialData?: AccountsInitialData): string {
     <span id="accountsProbeTime">最近探测: -</span>
     <span id="accountsTaskState">当前任务: 空闲</span>
     <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
-    <button class="btn btn-outline btn-sm" onclick="cancelQuickScan()" id="quickScanCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务</button>
+    <button class="btn btn-outline btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 主动维护</button>
+    <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务</button>
   </div>
 </div>
 <div class="table-wrapper">
@@ -328,7 +329,8 @@ export function accountsPage(initialData?: AccountsInitialData): string {
 let currentPage = 0, pageSize = 50, sortOrder = 'desc', totalRows = ${initialTotal};
 let searchTimer;
 let accountMetaTimer = null;
-let currentScanTaskId = null;
+let currentQuickTaskId = null;
+let currentQuickTaskType = null;
 
 function syncPager() {
   document.getElementById('totalCount').textContent = '共 ' + totalRows + ' 条';
@@ -513,26 +515,48 @@ function hideAlert() {
   document.getElementById('accountsAlert').style.display = 'none';
 }
 
-function setQuickScanRunningState(taskId, running) {
+function getQuickTaskMeta(type) {
+  if (type === 'maintain') {
+    return {
+      buttonId: 'quickMaintainBtn',
+      defaultHtml: '<span class="material-icons" style="font-size:16px">build</span> 主动维护',
+      runningLabel: '主动维护',
+      doneLabel: '维护',
+    };
+  }
+  return {
+    buttonId: 'quickScanBtn',
+    defaultHtml: '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描',
+    runningLabel: '立即扫描',
+    doneLabel: '扫描',
+  };
+}
+
+function setQuickTaskRunningState(taskId, running, type) {
   const scanBtn = document.getElementById('quickScanBtn');
-  const cancelBtn = document.getElementById('quickScanCancelBtn');
-  currentScanTaskId = running ? taskId : null;
+  const maintainBtn = document.getElementById('quickMaintainBtn');
+  const cancelBtn = document.getElementById('quickTaskCancelBtn');
+  currentQuickTaskId = running ? taskId : null;
+  currentQuickTaskType = running ? (type || 'scan') : null;
   scanBtn.disabled = !!running;
+  maintainBtn.disabled = !!running;
   if (!running) {
     scanBtn.innerHTML = '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描';
+    maintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">build</span> 主动维护';
   }
   cancelBtn.style.display = running ? 'inline-flex' : 'none';
   cancelBtn.disabled = false;
   cancelBtn.innerHTML = '<span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务';
 }
 
-async function cancelQuickScan() {
-  if (!currentScanTaskId) return;
-  if (!confirm('确认停止当前扫描任务？会在当前批次结束后安全停止。')) return;
-  const btn = document.getElementById('quickScanCancelBtn');
+async function cancelQuickTask() {
+  if (!currentQuickTaskId) return;
+  const taskLabel = currentQuickTaskType === 'maintain' ? '维护' : '扫描';
+  if (!confirm('确认停止当前' + taskLabel + '任务？会在当前批次结束后安全停止。')) return;
+  const btn = document.getElementById('quickTaskCancelBtn');
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> 停止中...';
-  const data = await api('/tasks/' + currentScanTaskId + '/cancel', { method: 'POST' });
+  const data = await api('/tasks/' + currentQuickTaskId + '/cancel', { method: 'POST' });
   if (!data?.ok) {
     btn.disabled = false;
     btn.innerHTML = '<span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务';
@@ -546,13 +570,14 @@ async function cancelQuickScan() {
     '</div>',
     'warning'
   );
-  if (window.showToast) window.showToast(data.message || '已发送停止请求', 'warning', 4000);
+  if (window.showToast) window.showToast((taskLabel + '任务：' + (data.message || '已发送停止请求')), 'warning', 4000);
 }
 
-async function pollScanTask(taskId) {
+async function pollQuickTask(taskId, mode) {
   if (scanPollTimer) clearTimeout(scanPollTimer);
   const task = await api('/tasks/' + taskId);
   if (!task) return;
+  const meta = getQuickTaskMeta(mode);
 
   const progress = Number(task.progress || 0);
   const total = Number(task.total || 0);
@@ -572,14 +597,14 @@ async function pollScanTask(taskId) {
       '<div style="display:flex;align-items:center;gap:12px">' +
         '<span class="material-icons" style="font-size:28px;color:var(--success)">task_alt</span>' +
         '<div style="flex:1">' +
-          '<div style="font-size:14px;font-weight:600;color:var(--success)">扫描完成</div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--success)">' + meta.doneLabel + '完成</div>' +
           (summary ? '<div style="margin-top:4px;font-size:12px;color:var(--text-dim)">' + summary + '</div>' : '') +
         '</div>' +
       '</div>',
       'success'
     );
-    if (window.showToast) window.showToast('扫描完成 — 列表已刷新', 'success');
-    setQuickScanRunningState(null, false);
+    if (window.showToast) window.showToast(meta.doneLabel + '完成 — 列表已刷新', 'success');
+    setQuickTaskRunningState(null, false);
     currentPage = 0;
     syncPager();
     await loadAccounts();
@@ -592,14 +617,14 @@ async function pollScanTask(taskId) {
       '<div style="display:flex;align-items:center;gap:12px">' +
         '<span class="material-icons" style="font-size:28px;color:var(--danger)">cancel</span>' +
         '<div style="flex:1">' +
-          '<div style="font-size:14px;font-weight:600;color:var(--danger)">扫描失败</div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--danger)">' + meta.doneLabel + '失败</div>' +
           '<div style="margin-top:4px;font-size:12px">' + (task.error || '未知错误') + '</div>' +
         '</div>' +
       '</div>',
       'danger'
     );
-    if (window.showToast) window.showToast('扫描失败: ' + (task.error || '未知错误'), 'danger', 6000);
-    setQuickScanRunningState(null, false);
+    if (window.showToast) window.showToast(meta.doneLabel + '失败: ' + (task.error || '未知错误'), 'danger', 6000);
+    setQuickTaskRunningState(null, false);
     return;
   }
   if (task.status === 'cancelled') {
@@ -607,14 +632,14 @@ async function pollScanTask(taskId) {
       '<div style="display:flex;align-items:center;gap:12px">' +
         '<span class="material-icons" style="font-size:28px;color:var(--warning)">stop_circle</span>' +
         '<div style="flex:1">' +
-          '<div style="font-size:14px;font-weight:600;color:var(--warning)">扫描已停止</div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--warning)">' + meta.doneLabel + '已停止</div>' +
           '<div style="margin-top:4px;font-size:12px">' + (task.error || task.cancel_reason || '用户手动停止任务') + '</div>' +
         '</div>' +
       '</div>',
       'warning'
     );
-    if (window.showToast) window.showToast('扫描任务已停止', 'warning', 5000);
-    setQuickScanRunningState(null, false);
+    if (window.showToast) window.showToast(meta.doneLabel + '任务已停止', 'warning', 5000);
+    setQuickTaskRunningState(null, false);
     return;
   }
 
@@ -627,7 +652,7 @@ async function pollScanTask(taskId) {
   const stopRequested = Number(task.cancel_requested || 0) === 1;
 
   // Update scan button to show live status
-  document.getElementById('quickScanBtn').innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> ' + (stopRequested ? '停止中...' : (total ? percent + '%' : phaseText));
+  document.getElementById(meta.buttonId).innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> ' + (stopRequested ? '停止中...' : (total ? percent + '%' : phaseText));
 
   showAlert(
     '<div style="display:flex;align-items:center;gap:12px">' +
@@ -648,23 +673,27 @@ async function pollScanTask(taskId) {
   // Refresh account list while scanning (live data as batches write)
   loadAccounts();
 
-  scanPollTimer = setTimeout(function() { pollScanTask(taskId); }, 2000);
+  scanPollTimer = setTimeout(function() { pollQuickTask(taskId, mode); }, 2000);
 }
 
-async function quickScan() {
-  if (!confirm('确认执行扫描? 将从当前 CPA 站点拉取最新数据并探测。')) return;
-  const btn = document.getElementById('quickScanBtn');
+async function runQuickTask(mode) {
+  const modeText = mode === 'maintain'
+    ? '确认执行主动维护？会基于当前 CPA 站点执行扫描、处理限额、清理 401 并尝试恢复已恢复账号。'
+    : '确认执行扫描? 将从当前 CPA 站点拉取最新数据并探测。';
+  if (!confirm(modeText)) return;
+  const meta = getQuickTaskMeta(mode);
+  const btn = document.getElementById(meta.buttonId);
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> 创建任务中...';
   showAlert(
     '<div style="display:flex;align-items:center;gap:10px">' +
       '<div class="spinner" style="width:16px;height:16px;border-width:2px;flex-shrink:0"></div>' +
-      '<span>正在创建扫描任务...</span>' +
+      '<span>正在创建' + meta.doneLabel + '任务...</span>' +
     '</div>',
     'info'
   );
   try {
-    const data = await api('/operations/scan', { method: 'POST' });
+    const data = await api('/operations/' + mode, { method: 'POST' });
     if (!data || !data.ok || !data.task_id) {
       showAlert(
         '<div style="display:flex;align-items:center;gap:10px">' +
@@ -673,13 +702,14 @@ async function quickScan() {
         '</div>',
         'danger'
       );
-      if (window.showToast) window.showToast('扫描任务创建失败', 'danger');
+      if (window.showToast) window.showToast(meta.doneLabel + '任务创建失败', 'danger');
       btn.disabled = false;
-      btn.innerHTML = '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描';
+      btn.innerHTML = meta.defaultHtml;
       return;
     }
-    if (window.showToast) window.showToast('扫描任务已创建，开始执行...', 'info', 3000);
-    await pollScanTask(data.task_id);
+    if (window.showToast) window.showToast(meta.doneLabel + '任务已创建，开始执行...', 'info', 3000);
+    setQuickTaskRunningState(data.task_id, true, mode);
+    await pollQuickTask(data.task_id, mode);
   } catch (e) {
     showAlert(
       '<div style="display:flex;align-items:center;gap:10px">' +
@@ -690,8 +720,16 @@ async function quickScan() {
     );
     if (window.showToast) window.showToast('网络请求失败', 'danger');
     btn.disabled = false;
-    btn.innerHTML = '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描';
+    btn.innerHTML = meta.defaultHtml;
   }
+}
+
+async function quickScan() {
+  await runQuickTask('scan');
+}
+
+async function quickMaintain() {
+  await runQuickTask('maintain');
 }
 
 syncPager();
