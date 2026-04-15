@@ -95,6 +95,8 @@ tr:hover td { background: rgba(108,92,231,.04); }
 .btn { padding: 8px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; border: 1px solid transparent; cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 6px; }
 .btn-primary { background: var(--primary); color: #fff; }
 .btn-primary:hover { background: var(--primary-hover); }
+.btn-warning { background: var(--warning); color: #1a1d27; }
+.btn-warning:hover { background: #f0b94d; }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #c0392b; }
 .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }

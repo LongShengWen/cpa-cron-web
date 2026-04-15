@@ -17,6 +17,8 @@ function humanizeManagedReason(value: unknown): string {
   const reason = String(value ?? '').trim();
   if (!reason) return '';
   switch (reason) {
+    case 'invalid_disabled':
+      return '系统因 401 / 账号失效自动禁用';
     case 'quota_disabled':
       return '系统因限额自动禁用';
     case 'quota_deleted':
@@ -75,6 +77,9 @@ function getAccountStatusReason(row: Record<string, unknown>): string {
   const managedReason = humanizeManagedReason(row.managed_reason);
   if (managedReason) return managedReason;
 
+  if (Number(row.disabled || 0) === 1 && Number(row.is_invalid_401 || 0) === 1) {
+    return '当前账号探测返回 401，且已被系统自动禁用';
+  }
   if (Number(row.disabled || 0) === 1 && Number(row.is_quota_limited || 0) === 1) {
     return '当前账号已被系统标记为限额并禁用';
   }
@@ -99,6 +104,7 @@ function getAccountStatusReason(row: Record<string, unknown>): string {
 function renderAccountStatusBadge(row: Record<string, unknown>): string {
   const tooltip = escapeHtmlAttr(getAccountStatusReason(row));
   const tooltipAttr = tooltip ? ` data-tooltip="${tooltip}" class="badge app-tooltip-anchor` : ' class="badge';
+  if (Number(row.disabled || 0) === 1 && Number(row.is_invalid_401 || 0) === 1) return `<span${tooltipAttr} badge-danger">401已禁用</span>`;
   if (Number(row.is_invalid_401 || 0) === 1) return `<span${tooltipAttr} badge-danger">401</span>`;
   if (Number(row.disabled || 0) === 1 && Number(row.is_quota_limited || 0) === 1) return `<span${tooltipAttr} badge-warning">限额已禁用</span>`;
   if (Number(row.is_quota_limited || 0) === 1) return `<span${tooltipAttr} badge-warning">限额</span>`;
@@ -283,7 +289,8 @@ export function accountsPage(initialData?: AccountsInitialData): string {
     <span id="accountsProbeTime">最近探测: -</span>
     <span id="accountsTaskState">当前任务: 空闲</span>
     <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
-    <button class="btn btn-outline btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 主动维护</button>
+    <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 主动维护</button>
+    <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
     <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务</button>
   </div>
 </div>
@@ -415,6 +422,7 @@ function escapeAttr(value) {
 function humanizeManagedReason(value) {
   const reason = String(value || '').trim();
   if (!reason) return '';
+  if (reason === 'invalid_disabled') return '系统因 401 / 账号失效自动禁用';
   if (reason === 'quota_disabled') return '系统因限额自动禁用';
   if (reason === 'quota_deleted') return '系统因限额自动删除';
   if (reason === 'deleted_401') return '系统因 401 失效自动删除';
@@ -445,6 +453,7 @@ function statusReason(row) {
   if (probeError) return '探测异常: ' + probeError;
   const managedReason = humanizeManagedReason(row.managed_reason);
   if (managedReason) return managedReason;
+  if (row.disabled && row.is_invalid_401) return '当前账号探测返回 401，且已被系统自动禁用';
   if (row.disabled && row.is_quota_limited) return '当前账号已被系统标记为限额并禁用';
   if (row.is_quota_limited) return '当前账号已命中限额判定';
   if (row.disabled && row.is_recovered) return '当前账号已恢复，可重新启用';
@@ -456,6 +465,7 @@ function statusReason(row) {
 function statusBadge(row) {
   const reason = statusReason(row);
   const tooltipAttr = reason ? ' data-tooltip="' + escapeAttr(reason) + '" class="badge app-tooltip-anchor' : ' class="badge';
+  if (row.disabled && row.is_invalid_401) return '<span' + tooltipAttr + ' badge-danger">401已禁用</span>';
   if (row.is_invalid_401) return '<span' + tooltipAttr + ' badge-danger">401</span>';
   if (row.disabled && row.is_quota_limited) return '<span' + tooltipAttr + ' badge-warning">限额已禁用</span>';
   if (row.is_quota_limited) return '<span' + tooltipAttr + ' badge-warning">限额</span>';
@@ -516,12 +526,22 @@ function hideAlert() {
 }
 
 function getQuickTaskMeta(type) {
+  if (type === 'scan-maintain') {
+    return {
+      buttonId: 'quickScanMaintainBtn',
+      defaultHtml: '<span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护',
+      runningLabel: '扫描并维护',
+      doneLabel: '扫描并维护',
+      requestPath: '/operations/maintain',
+    };
+  }
   if (type === 'maintain') {
     return {
       buttonId: 'quickMaintainBtn',
       defaultHtml: '<span class="material-icons" style="font-size:16px">build</span> 主动维护',
       runningLabel: '主动维护',
       doneLabel: '维护',
+      requestPath: '/operations/maintain',
     };
   }
   return {
@@ -529,20 +549,24 @@ function getQuickTaskMeta(type) {
     defaultHtml: '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描',
     runningLabel: '立即扫描',
     doneLabel: '扫描',
+    requestPath: '/operations/scan',
   };
 }
 
 function setQuickTaskRunningState(taskId, running, type) {
   const scanBtn = document.getElementById('quickScanBtn');
   const maintainBtn = document.getElementById('quickMaintainBtn');
+  const scanMaintainBtn = document.getElementById('quickScanMaintainBtn');
   const cancelBtn = document.getElementById('quickTaskCancelBtn');
   currentQuickTaskId = running ? taskId : null;
   currentQuickTaskType = running ? (type || 'scan') : null;
   scanBtn.disabled = !!running;
   maintainBtn.disabled = !!running;
+  scanMaintainBtn.disabled = !!running;
   if (!running) {
     scanBtn.innerHTML = '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描';
     maintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">build</span> 主动维护';
+    scanMaintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护';
   }
   cancelBtn.style.display = running ? 'inline-flex' : 'none';
   cancelBtn.disabled = false;
@@ -551,7 +575,9 @@ function setQuickTaskRunningState(taskId, running, type) {
 
 async function cancelQuickTask() {
   if (!currentQuickTaskId) return;
-  const taskLabel = currentQuickTaskType === 'maintain' ? '维护' : '扫描';
+  const taskLabel = currentQuickTaskType === 'scan-maintain'
+    ? '扫描并维护'
+    : (currentQuickTaskType === 'maintain' ? '维护' : '扫描');
   if (!confirm('确认停止当前' + taskLabel + '任务？会在当前批次结束后安全停止。')) return;
   const btn = document.getElementById('quickTaskCancelBtn');
   btn.disabled = true;
@@ -590,7 +616,14 @@ async function pollQuickTask(taskId, mode) {
       '401: ' + (resultData.invalid_401_count || 0) +
       ' | 限额: ' + (resultData.quota_limited_count || 0) +
       ' | 恢复: ' + (resultData.recovered_count || 0) +
-      (resultData.actions ? ' | 已删除: ' + (resultData.actions.deleted_401 || 0) : '')
+      (resultData.actions
+        ? (
+          ' | 禁用401/失效: ' + (resultData.actions.disabled_invalid || 0) +
+          ' | 禁用限额: ' + (resultData.actions.disabled_quota || 0) +
+          ' | 删除401: ' + (resultData.actions.deleted_401 || 0) +
+          ' | 恢复启用: ' + (resultData.actions.reenabled || 0)
+        )
+        : '')
     ) : '';
 
     showAlert(
@@ -677,9 +710,11 @@ async function pollQuickTask(taskId, mode) {
 }
 
 async function runQuickTask(mode) {
-  const modeText = mode === 'maintain'
-    ? '确认执行主动维护？会基于当前 CPA 站点执行扫描、处理限额、清理 401 并尝试恢复已恢复账号。'
-    : '确认执行扫描? 将从当前 CPA 站点拉取最新数据并探测。';
+  const modeText = mode === 'scan-maintain'
+    ? '确认执行扫描并维护？会先探测当前 CPA 站点账号状态，再按配置禁用限额账号、禁用或删除 401 / 失效账号，并自动恢复已恢复账号。'
+    : (mode === 'maintain'
+      ? '确认执行主动维护？会基于当前 CPA 站点执行扫描，并按配置禁用限额账号、禁用或删除 401 / 失效账号，并尝试恢复已恢复账号。'
+      : '确认执行扫描? 将从当前 CPA 站点拉取最新数据并探测。');
   if (!confirm(modeText)) return;
   const meta = getQuickTaskMeta(mode);
   const btn = document.getElementById(meta.buttonId);
@@ -693,7 +728,7 @@ async function runQuickTask(mode) {
     'info'
   );
   try {
-    const data = await api('/operations/' + mode, { method: 'POST' });
+    const data = await api(meta.requestPath, { method: 'POST' });
     if (!data || !data.ok || !data.task_id) {
       showAlert(
         '<div style="display:flex;align-items:center;gap:10px">' +
@@ -732,6 +767,10 @@ async function quickMaintain() {
   await runQuickTask('maintain');
 }
 
+async function quickScanMaintain() {
+  await runQuickTask('scan-maintain');
+}
+
 syncPager();
 loadAccounts();
 refreshAccountMeta();
@@ -761,8 +800,8 @@ export function operationsPage(): string {
     <div style="display:flex;align-items:center;gap:12px">
       <span class="material-icons" id="icon-maintain" style="font-size:36px;color:var(--warning)">build</span>
       <div style="flex:1">
-        <div class="label" id="label-maintain">清理失效账号</div>
-        <div style="font-size:13px;margin-top:4px;color:var(--text-dim)" id="desc-maintain">删除 401、处理限额、恢复正常账号</div>
+        <div class="label" id="label-maintain">扫描并维护账号</div>
+        <div style="font-size:13px;margin-top:4px;color:var(--text-dim)" id="desc-maintain">禁用限额、禁用或删除 401 / 失效账号，并自动恢复已恢复账号</div>
         <div id="progress-maintain" style="display:none;margin-top:8px">
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:6px">
             <div id="bar-maintain" class="progress-bar-animated" style="width:0%;height:100%;background:linear-gradient(90deg,var(--warning),var(--danger));transition:width .3s;border-radius:4px"></div>
@@ -806,7 +845,7 @@ let activeMode = null;
 
 const modeLabels = {
   scan: { label: '同步', icon: 'search', color: '--info', defaultLabel: '同步最新账号', defaultDesc: '从当前站点拉取最新账号并更新状态' },
-  maintain: { label: '清理', icon: 'build', color: '--warning', defaultLabel: '清理失效账号', defaultDesc: '删除 401、处理限额、恢复正常账号' },
+  maintain: { label: '维护', icon: 'build', color: '--warning', defaultLabel: '扫描并维护账号', defaultDesc: '禁用限额、禁用或删除 401 / 失效账号，并自动恢复已恢复账号' },
 };
 
 function phaseLabel(phase) {
@@ -903,6 +942,7 @@ function renderEngineResult(data) {
   html += statCard('失败', data.failure_count, 'danger');
   if (data.actions) {
     html += statCard('删除401账号', data.actions.deleted_401, 'danger');
+    html += statCard('禁用401/失效账号', data.actions.disabled_invalid, 'danger');
     html += statCard('禁用限额账号', data.actions.disabled_quota, 'warning');
     html += statCard('删除限额账号', data.actions.deleted_quota, 'danger');
     html += statCard('恢复正常账号', data.actions.reenabled, 'success');
@@ -923,7 +963,9 @@ function buildResultSummaryText(data) {
   if (data.recovered_count) parts.push('恢复: ' + data.recovered_count);
   if (data.actions) {
     if (data.actions.deleted_401) parts.push('删除401: ' + data.actions.deleted_401);
+    if (data.actions.disabled_invalid) parts.push('禁用401/失效: ' + data.actions.disabled_invalid);
     if (data.actions.disabled_quota) parts.push('禁用限额: ' + data.actions.disabled_quota);
+    if (data.actions.deleted_quota) parts.push('删除限额: ' + data.actions.deleted_quota);
     if (data.actions.reenabled) parts.push('恢复: ' + data.actions.reenabled);
   }
   return parts.join(' | ') || '执行完成';

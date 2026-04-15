@@ -204,11 +204,22 @@ export function classifyAccountState(
     effectiveRatio != null &&
     effectiveRatio <= quotaDisableThreshold;
 
+  // NOTE:
+  // 对 Codex / ChatGPT 账号来说，真正用于运维判定的状态应以 wham/usage 为准。
+  // 我们实际抽样到的 CLIProxyAPI 数据里，周限额账号经常同时带有 unavailable=true，
+  // 如果这里把 unavailable 当成“不要标记限额”的条件，就会把真正的周限额账号漏掉。
+  //
+  // 此外，当前站点实测 wham/usage 的主窗口 limit_window_seconds=604800（7天），
+  // 也就是这里所谓的“限额”本质上对应周限额窗口。
+  const quotaSignalTriggered =
+    usageLimitError ||
+    limitReached === 1 ||
+    (allowed === 0 && thresholdTriggered);
+
   const quotaLimited =
     !invalid401 &&
-    !record.unavailable &&
     (
-      ((record.api_status_code === 200) && (limitReached === 1 || thresholdTriggered))
+      ((record.api_status_code === 200) && quotaSignalTriggered)
       || usageLimitError
     );
 
@@ -218,7 +229,7 @@ export function classifyAccountState(
     !!record.disabled &&
     record.api_status_code === 200 &&
     allowed === 1 &&
-    limitReached === 0;
+    limitReached !== 1;
 
   record.quota_signal_source = source;
   record.quota_remaining_ratio = effectiveRatio;
@@ -296,30 +307,32 @@ export function buildAuthRecord(
     auth_updated_at: (String(item.updated_at ?? '').trim()) || null,
     auth_modtime: (String(item.modtime ?? '').trim()) || null,
     auth_last_refresh: (String(item.last_refresh ?? '').trim()) || null,
-    api_http_status: null,
-    api_status_code: null,
-    usage_allowed: null,
-    usage_limit_reached: null,
-    usage_plan_type: null,
-    usage_email: null,
-    usage_reset_at: null,
-    usage_reset_after_seconds: null,
-    usage_spark_allowed: null,
-    usage_spark_limit_reached: null,
-    usage_spark_reset_at: null,
-    usage_spark_reset_after_seconds: null,
-    quota_signal_source: null,
-    is_invalid_401: 0,
-    is_quota_limited: 0,
-    is_recovered: 0,
-    probe_error_kind: null,
-    probe_error_text: null,
+    // 保留上一次真实探测得到的状态，避免“轮转探测只扫一部分账号”时，
+    // 未被本轮探测到的账号状态被 inventory 刷新错误清空。
+    api_http_status: ex.api_http_status ?? null,
+    api_status_code: ex.api_status_code ?? null,
+    usage_allowed: ex.usage_allowed ?? null,
+    usage_limit_reached: ex.usage_limit_reached ?? null,
+    usage_plan_type: ex.usage_plan_type ?? null,
+    usage_email: ex.usage_email ?? null,
+    usage_reset_at: ex.usage_reset_at ?? null,
+    usage_reset_after_seconds: ex.usage_reset_after_seconds ?? null,
+    usage_spark_allowed: ex.usage_spark_allowed ?? null,
+    usage_spark_limit_reached: ex.usage_spark_limit_reached ?? null,
+    usage_spark_reset_at: ex.usage_spark_reset_at ?? null,
+    usage_spark_reset_after_seconds: ex.usage_spark_reset_after_seconds ?? null,
+    quota_signal_source: ex.quota_signal_source ?? null,
+    is_invalid_401: Number(ex.is_invalid_401 ?? 0) === 1 ? 1 : 0,
+    is_quota_limited: Number(ex.is_quota_limited ?? 0) === 1 ? 1 : 0,
+    is_recovered: Number(ex.is_recovered ?? 0) === 1 ? 1 : 0,
+    probe_error_kind: ex.probe_error_kind ?? null,
+    probe_error_text: ex.probe_error_text ?? null,
     managed_reason: ex.managed_reason ?? null,
     last_action: ex.last_action ?? null,
     last_action_status: ex.last_action_status ?? null,
     last_action_error: ex.last_action_error ?? null,
     last_seen_at: nowIso,
-    last_probed_at: null,
+    last_probed_at: ex.last_probed_at ?? null,
     updated_at: nowIso,
   };
 }

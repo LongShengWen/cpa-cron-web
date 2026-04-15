@@ -102,6 +102,88 @@ function selectRotatingRecords<T>(
   };
 }
 
+function statusMessageIndicatesQuota(record: Record<string, unknown>): boolean {
+  const raw = String(record.status_message ?? '').trim();
+  if (!raw) return false;
+  if (/usage_limit_reached/i.test(raw)) return true;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const directType = String(parsed.type ?? '').trim();
+    if (directType === 'usage_limit_reached') return true;
+    const errorObj = parsed.error;
+    if (errorObj && typeof errorObj === 'object' && !Array.isArray(errorObj)) {
+      return String((errorObj as Record<string, unknown>).type ?? '').trim() === 'usage_limit_reached';
+    }
+  } catch {
+    // ignore non-json status_message
+  }
+  return false;
+}
+
+function statusMessageIndicatesInvalid(record: Record<string, unknown>): boolean {
+  const raw = String(record.status_message ?? '').trim();
+  if (!raw) return false;
+  return /(unauthorized|401|invalid token|token expired|expired|payment_required|not_found)/i.test(raw);
+}
+
+function getProbePriority(record: Record<string, unknown>): number {
+  if (Number(record.is_invalid_401 ?? 0) === 1 || statusMessageIndicatesInvalid(record)) return 4;
+  if (Number(record.is_quota_limited ?? 0) === 1 || statusMessageIndicatesQuota(record)) return 3;
+  if (String(record.status ?? '').trim().toLowerCase() === 'error') return 2;
+  if (Number(record.unavailable ?? 0) === 1) return 2;
+  if (!record.last_probed_at) return 1;
+  return 0;
+}
+
+function selectPriorityProbeRecords(
+  records: Record<string, unknown>[],
+  limit: number,
+  cursor: number
+): {
+  selected: Record<string, unknown>[];
+  start: number;
+  nextCursor: number;
+  partial: boolean;
+} {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (records.length <= normalizedLimit) {
+    return { selected: records.slice(), start: 0, nextCursor: 0, partial: false };
+  }
+
+  const buckets = [4, 3, 2, 1, 0].map((priority) => ({
+    priority,
+    records: records.filter((record) => getProbePriority(record) === priority),
+  }));
+
+  const selected: Record<string, unknown>[] = [];
+  let activeStart = 0;
+  let activeNextCursor = 0;
+
+  for (const bucket of buckets) {
+    if (selected.length >= normalizedLimit) break;
+    if (bucket.records.length === 0) continue;
+
+    const remaining = normalizedLimit - selected.length;
+    if (bucket.records.length <= remaining) {
+      selected.push(...bucket.records);
+      continue;
+    }
+
+    const rotated = selectRotatingRecords(bucket.records, remaining, cursor);
+    selected.push(...rotated.selected);
+    activeStart = rotated.start;
+    activeNextCursor = rotated.nextCursor;
+    break;
+  }
+
+  return {
+    selected,
+    start: activeStart,
+    nextCursor: activeNextCursor,
+    partial: true,
+  };
+}
+
 function summarizeActionResults(results: Array<{ name: string; ok: boolean; error: string | null }>): {
   total: number;
   success: number;
@@ -182,6 +264,7 @@ export interface EngineResult {
   failure_count: number;
   actions?: {
     deleted_401: number;
+    disabled_invalid: number;
     disabled_quota: number;
     deleted_quota: number;
     reenabled: number;
@@ -334,7 +417,7 @@ export async function runScan(
     const total = candidateRecords.length;
     filteredCount = total;
     const storedProbeCursor = (await loadProbeCursor(db, cursorKey)).cursor;
-    const probeWindow = selectRotatingRecords(candidateRecords, maxProbeRecords, storedProbeCursor);
+    const probeWindow = selectPriorityProbeRecords(candidateRecords, maxProbeRecords, storedProbeCursor);
     const probeTargets = probeWindow.selected;
     probeNames = probeTargets.map((record) => String(record.name)).filter(Boolean);
     probePartial = probeWindow.partial;
@@ -547,12 +630,12 @@ export async function runMaintain(
     });
 
     const existingState = await loadExistingState(db);
-    const probedNameSet = new Set((scanResult.probed_names || []).map((name) => String(name)).filter(Boolean));
     const candidateRecords = Array.from(existingState.values()).filter((r) =>
       matchesFilters(r, config.target_type, config.provider)
-      && (probedNameSet.size === 0 || probedNameSet.has(String(r.name)))
     );
-    const invalidRecords = candidateRecords.filter((r) => Number(r.is_invalid_401) === 1);
+    const invalidRecords = candidateRecords.filter((r) =>
+      Number(r.is_invalid_401) === 1 || statusMessageIndicatesInvalid(r)
+    );
     const quotaRecords = candidateRecords.filter(
       (r) => Number(r.is_quota_limited) === 1 && Number(r.is_invalid_401) !== 1
     );
@@ -569,12 +652,15 @@ export async function runMaintain(
     const nowIso = new Date().toISOString();
     const actionConcurrency = boundedConcurrency(config.action_workers, DEFAULT_ACTION_CONCURRENCY, MAX_ACTION_CONCURRENCY);
     const isCronRun = username === 'system';
-    let deleted401 = 0, disabledQuota = 0, deletedQuota = 0, reenabled = 0;
+    let deleted401 = 0, disabledInvalid = 0, disabledQuota = 0, deletedQuota = 0, reenabled = 0;
     let deletedLocal = 0;
 
-    // Delete 401 — in batches
+    // 401 / 账号失效处理
     if (config.delete_401 && invalidRecords.length > 0) {
-      const names = invalidRecords.map((r) => String(r.name)).filter(Boolean);
+      const names = invalidRecords
+        .filter((r) => Number(r.is_invalid_401) === 1)
+        .map((r) => String(r.name))
+        .filter(Boolean);
       for (const batch of chunks(names, ACTION_BATCH_SIZE)) {
         await ensureTaskNotCancelled(db, taskId);
         const tasks = batch.map((name) => () =>
@@ -608,6 +694,66 @@ export async function runMaintain(
           db,
           'maintain_delete_401_batch',
           formatActionSummaryDetail('删除401批次', summary, [`本地删除=${deletedBatchNames.length}`]),
+          username
+        );
+      }
+    } else if (invalidRecords.length > 0) {
+      const toDisableInvalid = invalidRecords.filter(
+        (r) => !deletedNames.has(String(r.name)) && Number(r.disabled) !== 1
+      );
+      for (const batch of chunks(toDisableInvalid, ACTION_BATCH_SIZE)) {
+        await ensureTaskNotCancelled(db, taskId);
+        const tasks = batch.map((r) => () =>
+          setAccountDisabled(config.base_url, config.token, String(r.name), true, config.timeout)
+        );
+        const results = await runWithConcurrency(tasks, actionConcurrency);
+        await logActionResults(db, 'maintain_disable_invalid_account', results, username, { logSuccesses: !isCronRun });
+        const updates: Record<string, unknown>[] = [];
+        for (const result of results) {
+          if (result.ok) disabledInvalid++;
+          const record = existingState.get(result.name);
+          if (record) {
+            record.last_action = 'disable_invalid';
+            record.last_action_status = result.ok ? 'success' : 'failed';
+            record.last_action_error = result.error;
+            if (result.ok) {
+              record.managed_reason = 'invalid_disabled';
+              record.disabled = 1;
+              record.is_recovered = 0;
+            }
+            record.updated_at = nowIso;
+            updates.push(record);
+          }
+        }
+        await upsertAuthAccounts(db, updates);
+
+        const summary = summarizeActionResults(results);
+        await logActivity(
+          db,
+          'maintain_disable_invalid_batch',
+          formatActionSummaryDetail('禁用401/失效批次', summary),
+          username
+        );
+      }
+
+      const invalidAlreadyDisabled = invalidRecords.filter(
+        (r) => !deletedNames.has(String(r.name)) && Number(r.disabled) === 1
+      );
+      if (invalidAlreadyDisabled.length > 0) {
+        await ensureTaskNotCancelled(db, taskId);
+        const updates = invalidAlreadyDisabled.map((r) => ({
+          ...r,
+          managed_reason: 'invalid_disabled',
+          last_action: 'mark_invalid_disabled',
+          last_action_status: 'success',
+          last_action_error: null,
+          updated_at: nowIso,
+        }));
+        await upsertAuthAccounts(db, updates);
+        await logActivity(
+          db,
+          'maintain_mark_invalid_disabled',
+          `标记已禁用401/失效账号: ${invalidAlreadyDisabled.map((row) => String(row.name)).slice(0, 20).join(', ')} | 数量=${invalidAlreadyDisabled.length}`,
           username
         );
       }
@@ -765,7 +911,6 @@ export async function runMaintain(
     const finalState = await loadExistingState(db);
     const finalCandidates = Array.from(finalState.values()).filter((r) =>
       matchesFilters(r, config.target_type, config.provider)
-      && (probedNameSet.size === 0 || probedNameSet.has(String(r.name)))
     );
     const finalInvalidRecords = finalCandidates.filter((r) => Number(r.is_invalid_401) === 1);
     const finalQuotaRecords = finalCandidates.filter((r) => Number(r.is_quota_limited) === 1);
@@ -793,7 +938,7 @@ export async function runMaintain(
       quota_limited_count: finalQuotaRecords.length,
       recovered_count: finalRecoveredRecords.length,
       failure_count: finalFailureRecords.length,
-      actions: { deleted_401: deleted401, disabled_quota: disabledQuota, deleted_quota: deletedQuota, reenabled },
+      actions: { deleted_401: deleted401, disabled_invalid: disabledInvalid, disabled_quota: disabledQuota, deleted_quota: deletedQuota, reenabled },
       probe_scope: scanResult.probe_scope,
       probed_names: scanResult.probed_names,
     };
@@ -804,7 +949,7 @@ export async function runMaintain(
     });
 
     await logActivity(db, 'maintain',
-      `维护完成: 本次探测=${candidateRecords.length}/${scanResult.filtered_count} 删除401=${deleted401} 删除本地=${deletedLocal} 禁用限额=${disabledQuota} 删除限额=${deletedQuota} 恢复=${reenabled} 剩余401=${finalInvalidRecords.length} 剩余限额=${finalQuotaRecords.length}${scanResult.probe_scope?.partial ? ` | 轮转探测 next_cursor=${scanResult.probe_scope.next_cursor ?? 0}` : ''}`,
+      `维护完成: 当前候选=${candidateRecords.length}/${scanResult.filtered_count} 删除401=${deleted401} 禁用401/失效=${disabledInvalid} 删除本地=${deletedLocal} 禁用限额=${disabledQuota} 删除限额=${deletedQuota} 恢复=${reenabled} 剩余401=${finalInvalidRecords.length} 剩余限额=${finalQuotaRecords.length}${scanResult.probe_scope?.partial ? ` | 轮转探测 next_cursor=${scanResult.probe_scope.next_cursor ?? 0}` : ''}`,
       username
     );
 
