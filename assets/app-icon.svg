@@ -4,27 +4,23 @@
       <stop stop-color="#6C5CE7"/>
       <stop offset="1" stop-color="#74B9FF"/>
     </linearGradient>
-    <linearGradient id="panel" x1="256" y1="240" x2="768" y2="784" gradientUnits="userSpaceOnUse">
-      <stop stop-color="rgba(255,255,255,0.12)"/>
-      <stop offset="1" stop-color="rgba(15,17,23,0.18)"/>
-    </linearGradient>
-    <filter id="blur24" x="0" y="0" width="1024" height="1024">
+    <filter id="blur24" x="280" y="204" width="464" height="590" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feGaussianBlur stdDeviation="12"/>
     </filter>
   </defs>
   <rect x="24" y="24" width="976" height="976" rx="220" fill="url(#bg)"/>
-  <path d="M273 634C308 736 404 810 512 810" stroke="rgba(255,255,255,0.16)" stroke-width="26" stroke-linecap="round"/>
-  <path d="M752 390C715 286 619 214 512 214" stroke="rgba(255,255,255,0.16)" stroke-width="26" stroke-linecap="round"/>
-  <path d="M712 230L774 246L744 302" fill="rgba(255,255,255,0.22)"/>
-  <path d="M313 794L250 776L280 720" fill="rgba(255,255,255,0.22)"/>
-  <rect x="222" y="222" width="580" height="580" rx="160" fill="rgba(15,17,23,0.52)" stroke="rgba(255,255,255,0.12)" stroke-width="3"/>
-  <path d="M512 282L690 346L660 590L512 728L364 590L334 346L512 282Z" fill="rgba(255,255,255,0.08)" filter="url(#blur24)"/>
-  <path d="M512 282L690 346L660 590L512 728L364 590L334 346L512 282Z" stroke="#F5F7FF" stroke-width="24" stroke-linejoin="round"/>
-  <path d="M438 502L494 562L608 438" stroke="#00DCAA" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="695" cy="315" r="85" fill="#FDCB6E" stroke="rgba(255,255,255,0.82)" stroke-width="10"/>
-  <circle cx="695" cy="315" r="55" fill="rgba(15,17,23,0.86)"/>
-  <path d="M695 315V285" stroke="#FDCB6E" stroke-width="12" stroke-linecap="round"/>
-  <path d="M695 315L723 332" stroke="#FDCB6E" stroke-width="12" stroke-linecap="round"/>
-  <circle cx="695" cy="315" r="11" fill="#FDCB6E"/>
-  <path d="M64 64H960C960 230 810 348 640 348H384C214 348 64 230 64 64Z" fill="rgba(255,255,255,0.05)"/>
+  <path d="M227 642C268 766 381 850 512 850" stroke="white" stroke-opacity="0.16" stroke-width="28" stroke-linecap="round"/>
+  <path d="M798 382C755 258 642 174 512 174" stroke="white" stroke-opacity="0.16" stroke-width="28" stroke-linecap="round"/>
+  <path d="M754 200L826 220L790 286" fill="#12141A" fill-opacity="0.68"/>
+  <path d="M270 824L198 804L234 738" fill="#12141A" fill-opacity="0.68"/>
+  <rect x="176" y="176" width="672" height="672" rx="182" fill="#0F1117" fill-opacity="0.50" stroke="white" stroke-opacity="0.12" stroke-width="3"/>
+  <path d="M512 228L720 306L684 602L512 770L340 602L304 306L512 228Z" fill="white" fill-opacity="0.08" filter="url(#blur24)"/>
+  <path d="M512 228L720 306L684 602L512 770L340 602L304 306L512 228Z" stroke="#F5F7FF" stroke-width="28" stroke-linejoin="round"/>
+  <path d="M424 520L496 590L632 436" stroke="#00DCAA" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="729" cy="295" r="101" fill="#FDCB6E" stroke="white" stroke-opacity="0.84" stroke-width="12"/>
+  <circle cx="729" cy="295" r="65" fill="#0F1117" fill-opacity="0.88"/>
+  <path d="M729 295V258" stroke="#FDCB6E" stroke-width="14" stroke-linecap="round"/>
+  <path d="M729 295L760 318" stroke="#FDCB6E" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="729" cy="295" r="13" fill="#FDCB6E"/>
+  <path d="M64 64H960C960 212 820 320 652 320H372C204 320 64 212 64 64Z" fill="white" fill-opacity="0.05"/>
 </svg>
