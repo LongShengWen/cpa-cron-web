@@ -37,6 +37,19 @@ function safeJson(body: string): Record<string, unknown> {
   }
 }
 
+function getUsageLimitErrorPayload(body: Record<string, unknown>): Record<string, unknown> | null {
+  const directType = String(body.type ?? '').trim();
+  if (directType === 'usage_limit_reached') return body;
+
+  const nested = body.error;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedObj = nested as Record<string, unknown>;
+    const nestedType = String(nestedObj.type ?? '').trim();
+    if (nestedType === 'usage_limit_reached') return nestedObj;
+  }
+  return null;
+}
+
 function maybeJsonLoads(value: unknown): unknown {
   if (typeof value === 'object' && value !== null) return value;
   if (typeof value !== 'string') return null;
@@ -179,6 +192,8 @@ export function classifyAccountState(
 ): Record<string, unknown> {
   const invalid401 =
     record.api_status_code === 401;
+  const usageLimitError =
+    String(record.usage_error_type ?? '').trim() === 'usage_limit_reached';
 
   const { limitReached, allowed, source } = resolveQuotaSignal(record);
   const { ratio: effectiveRatio, source: ratioSource } = resolveQuotaRemainingRatio(record);
@@ -192,8 +207,10 @@ export function classifyAccountState(
   const quotaLimited =
     !invalid401 &&
     !record.unavailable &&
-    record.api_status_code === 200 &&
-    (limitReached === 1 || thresholdTriggered);
+    (
+      ((record.api_status_code === 200) && (limitReached === 1 || thresholdTriggered))
+      || usageLimitError
+    );
 
   const recovered =
     !invalid401 &&
@@ -257,9 +274,12 @@ export function buildAuthRecord(
   const idTokenObj = getIdTokenObject(item);
   const idTokenJson = Object.keys(idTokenObj).length > 0 ? JSON.stringify(idTokenObj) : null;
   const ex = existing || {};
+  const disabled = Object.prototype.hasOwnProperty.call(item, 'disabled')
+    ? (item.disabled ? 1 : 0)
+    : Number(ex.disabled ?? 0) === 1 ? 1 : 0;
   return {
     name: getItemName(item),
-    disabled: item.disabled ? 1 : 0,
+    disabled,
     id_token_json: idTokenJson,
     email: (String(item.email ?? '').trim()) || null,
     provider: (String(item.provider ?? '').trim()) || null,
@@ -469,6 +489,25 @@ export async function probeWhamUsage(
           result.probe_error_text = 'api-call body is not valid JSON';
           return result;
         }
+      }
+
+      const usageLimitErrorPayload = getUsageLimitErrorPayload(parsedBody);
+      if (usageLimitErrorPayload) {
+        result.usage_error_type = 'usage_limit_reached';
+        result.usage_allowed = 0;
+        result.usage_limit_reached = 1;
+        result.usage_plan_type = (String(
+          usageLimitErrorPayload.plan_type ?? parsedBody.plan_type ?? ''
+        ).trim()) || null;
+        result.usage_reset_at = usageLimitErrorPayload.resets_at != null
+          ? Number(usageLimitErrorPayload.resets_at)
+          : null;
+        result.usage_reset_after_seconds = usageLimitErrorPayload.resets_in_seconds != null
+          ? Number(usageLimitErrorPayload.resets_in_seconds)
+          : null;
+        result.probe_error_kind = null;
+        result.probe_error_text = null;
+        return classifyAccountState(result, quotaDisableThreshold);
       }
 
       // Extract usage data
