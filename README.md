@@ -121,7 +121,7 @@ JWT_SECRET=please-change-me ADMIN_PASSWORD=admin123 npm run docker:start
 
 默认行为：
 
-- 监听 `0.0.0.0:8787`
+- 监听 `0.0.0.0:18787`
 - SQLite 数据库文件在 `/data/cpa-cron-web.db`
 - 会自动执行 `migrations/*.sql`
 - 会自动启动“每分钟 tick 一次”的本地调度器，再由系统配置中的 `cron_expression` 决定是否真正执行维护
@@ -132,7 +132,7 @@ JWT_SECRET=please-change-me ADMIN_PASSWORD=admin123 npm run docker:start
 docker build -t cpa-cron-web .
 docker run -d \
   --name cpa-cron-web \
-  -p 8787:8787 \
+  -p 18787:18787 \
   -e JWT_SECRET=please-change-me \
   -e ADMIN_PASSWORD=admin123 \
   -e CPA_BASE_URL=http://192.168.2.1 \
@@ -150,8 +150,8 @@ docker compose up -d --build
 
 首次启动后可通过以下地址确认服务是否正常：
 
-- 面板首页：`http://127.0.0.1:8787`
-- 健康检查：`http://127.0.0.1:8787/healthz`
+- 面板首页：`http://127.0.0.1:18787`
+- 健康检查：`http://127.0.0.1:18787/healthz`
 
 ## 部署模式对比
 
@@ -184,7 +184,7 @@ Too many subrequests by single Worker invocation
 - `ADMIN_PASSWORD_HASH`: 可选，管理员密码哈希；如果提供则优先使用
 - `SQLITE_PATH`: 仅 Docker / Node.js 模式使用，本地 SQLite 数据库文件路径，默认 `/data/cpa-cron-web.db`
 - `HOST`: 仅 Docker / Node.js 模式使用，默认 `0.0.0.0`
-- `PORT`: 仅 Docker / Node.js 模式使用，默认 `8787`
+- `PORT`: 仅 Docker / Node.js 模式使用，默认 `18787`
 - `ENABLE_CRON`: 仅 Docker / Node.js 模式使用，默认 `true`
 
 说明：
@@ -455,7 +455,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin123456
 CPA_BASE_URL=http://192.168.2.1
 CPA_TOKEN=replace-me
-PORT=8787
+PORT=18787
 HOST=0.0.0.0
 SQLITE_PATH=/data/cpa-cron-web.db
 ENABLE_CRON=true
@@ -493,7 +493,7 @@ Docker / Node.js 模式下不需要这个特殊触发地址，进程启动后会
 如果只是想验证服务是否活着，可以直接访问：
 
 ```bash
-curl http://127.0.0.1:8787/healthz
+curl http://127.0.0.1:18787/healthz
 ```
 
 ## 安全说明

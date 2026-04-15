@@ -3,7 +3,7 @@ import { app, runScheduledMaintain } from '../index';
 import { createLocalBindingsFromEnv } from './local-platform';
 
 const bindings = createLocalBindingsFromEnv();
-const port = Number.parseInt(process.env.PORT || '8787', 10) || 8787;
+const port = Number.parseInt(process.env.PORT || '18787', 10) || 18787;
 const host = (process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 const enableCron = !['0', 'false', 'off', 'no'].includes(String(process.env.ENABLE_CRON || 'true').trim().toLowerCase());
 const baseCronExpression = '* * * * *';
