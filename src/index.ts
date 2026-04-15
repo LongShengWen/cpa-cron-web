@@ -4,9 +4,10 @@ import type { HonoEnv } from './types';
 import { authMiddleware, ensureAdminExists } from './middleware/auth';
 import apiRoutes from './routes/api';
 import pageRoutes from './routes/pages';
-import { loadConfig, validateConfig, saveCronMeta } from './core/config';
+import { loadConfig, validateConfig, saveCronMeta, loadCronMeta, validateCronExpression } from './core/config';
 import { createTask, logActivity, updateTask } from './core/db';
 import { runMaintain } from './core/engine';
+import { matchesCronExpression } from './core/cron';
 
 const app = new Hono<HonoEnv>();
 
@@ -85,8 +86,27 @@ async function releaseCronLock(kv: KVNamespace): Promise<void> {
 
 async function runScheduledMaintain(env: HonoEnv['Bindings'], cronExpression: string): Promise<void> {
   const now = new Date().toISOString();
-  const cronExpr = cronExpression || '*/30 * * * *';
+  const cronMeta = await loadCronMeta(env.DB);
+  const configuredCronExpr = (cronMeta.cron_expression || '').trim();
+  const fallbackCronExpr = cronExpression || '*/30 * * * *';
+  const cronExpr = configuredCronExpr || fallbackCronExpr;
   let taskId: number | null = null;
+
+  const cronValidationErrors = validateCronExpression(cronExpr);
+  if (cronValidationErrors.length > 0) {
+    await saveCronMeta(env.DB, {
+      cron_last_result: 'skipped',
+      cron_last_error: cronValidationErrors.join('; '),
+      cron_expression: cronExpr,
+    });
+    await logActivity(env.DB, 'cron_maintain_skipped', `定时任务跳过，Cron 配置无效: ${cronValidationErrors.join('; ')}`, 'system');
+    return;
+  }
+
+  if (!matchesCronExpression(new Date(), cronExpr)) {
+    await saveCronMeta(env.DB, { cron_expression: cronExpr });
+    return;
+  }
 
   // ── distributed lock: skip if another cron run is still in progress ──
   const acquired = await acquireCronLock(env.KV);

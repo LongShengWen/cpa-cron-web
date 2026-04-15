@@ -184,7 +184,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 <aside class="sidebar">
   <div class="sidebar-header">
     <h1>cpa-cron-web</h1>
-    <p>v1.1 | Web Management</p>
+    <p>v1.2 | Web Management</p>
   </div>
   <nav class="sidebar-nav">
     ${navHtml}

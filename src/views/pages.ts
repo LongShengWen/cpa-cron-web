@@ -23,16 +23,53 @@ function humanizeManagedReason(value: unknown): string {
       return '系统因限额自动删除';
     case 'deleted_401':
       return '系统因 401 失效自动删除';
+    case 'manual_disabled':
+      return '账号被手动禁用';
     default:
       return reason;
   }
+}
+
+function humanizeProbeError(kind: unknown, text: unknown): string {
+  const rawKind = String(kind ?? '').trim();
+  const rawText = String(text ?? '').trim();
+  const mapped = (() => {
+    switch (rawKind) {
+      case 'missing_auth_index':
+        return '账号缺少 auth_index，无法发起探测';
+      case 'missing_chatgpt_account_id':
+        return '账号缺少 ChatGPT Account Id，无法获取 usage';
+      case 'management_api_http_429':
+        return '管理接口触发限流，请稍后重试';
+      case 'management_api_http_5xx':
+        return '管理接口服务异常，请稍后重试';
+      case 'management_api_http_4xx':
+        return '管理接口请求失败，请检查 CPA 配置与远端响应';
+      case 'api_call_not_object':
+        return '管理接口返回的数据格式不正确';
+      case 'api_call_invalid_json':
+        return '管理接口返回了非法 JSON';
+      case 'missing_status_code':
+        return '上游返回缺少 status_code，无法判定账号状态';
+      case 'body_not_object':
+        return '上游返回体格式不正确';
+      case 'body_invalid_json':
+        return '上游返回体不是合法 JSON';
+      case 'timeout':
+        return '探测超时，请检查网络或目标服务响应速度';
+      default:
+        return '';
+    }
+  })();
+  if (mapped && rawText && !mapped.includes(rawText)) return `${mapped} (${rawText})`;
+  return mapped || rawText;
 }
 
 function getAccountStatusReason(row: Record<string, unknown>): string {
   const lastActionError = String(row.last_action_error ?? '').trim();
   if (lastActionError) return `操作失败: ${lastActionError}`;
 
-  const probeErrorText = String(row.probe_error_text ?? '').trim();
+  const probeErrorText = humanizeProbeError(row.probe_error_kind, row.probe_error_text);
   if (probeErrorText) return `探测异常: ${probeErrorText}`;
 
   const managedReason = humanizeManagedReason(row.managed_reason);
@@ -183,7 +220,7 @@ export function dashboardPage(): string {
     <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text-dim)">
       <div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-          <span style="font-weight:600;color:var(--text)">执行频率</span>
+          <span style="font-weight:600;color:var(--text)">执行频率 (UTC)</span>
           <span class="badge badge-info">\${cronToHuman(cronExpr)}</span>
           <code style="opacity:0.5">\${cronExpr}</code>
         </div>
@@ -371,11 +408,31 @@ function humanizeManagedReason(value) {
   if (reason === 'quota_disabled') return '系统因限额自动禁用';
   if (reason === 'quota_deleted') return '系统因限额自动删除';
   if (reason === 'deleted_401') return '系统因 401 失效自动删除';
+  if (reason === 'manual_disabled') return '账号被手动禁用';
   return reason;
+}
+function humanizeProbeError(kind, text) {
+  const rawKind = String(kind || '').trim();
+  const rawText = String(text || '').trim();
+  let mapped = '';
+  if (rawKind === 'missing_auth_index') mapped = '账号缺少 auth_index，无法发起探测';
+  else if (rawKind === 'missing_chatgpt_account_id') mapped = '账号缺少 ChatGPT Account Id，无法获取 usage';
+  else if (rawKind === 'management_api_http_429') mapped = '管理接口触发限流，请稍后重试';
+  else if (rawKind === 'management_api_http_5xx') mapped = '管理接口服务异常，请稍后重试';
+  else if (rawKind === 'management_api_http_4xx') mapped = '管理接口请求失败，请检查 CPA 配置与远端响应';
+  else if (rawKind === 'api_call_not_object') mapped = '管理接口返回的数据格式不正确';
+  else if (rawKind === 'api_call_invalid_json') mapped = '管理接口返回了非法 JSON';
+  else if (rawKind === 'missing_status_code') mapped = '上游返回缺少 status_code，无法判定账号状态';
+  else if (rawKind === 'body_not_object') mapped = '上游返回体格式不正确';
+  else if (rawKind === 'body_invalid_json') mapped = '上游返回体不是合法 JSON';
+  else if (rawKind === 'timeout') mapped = '探测超时，请检查网络或目标服务响应速度';
+  if (mapped && rawText && mapped.indexOf(rawText) === -1) return mapped + ' (' + rawText + ')';
+  return mapped || rawText;
 }
 function statusReason(row) {
   if (row.last_action_error) return '操作失败: ' + row.last_action_error;
-  if (row.probe_error_text) return '探测异常: ' + row.probe_error_text;
+  const probeError = humanizeProbeError(row.probe_error_kind, row.probe_error_text);
+  if (probeError) return '探测异常: ' + probeError;
   const managedReason = humanizeManagedReason(row.managed_reason);
   if (managedReason) return managedReason;
   if (row.disabled && row.is_quota_limited) return '当前账号已被系统标记为限额并禁用';
@@ -1184,6 +1241,24 @@ export function settingsPage(): string {
     <div style="padding:20px">
       <div style="margin-bottom:14px;font-size:12px;color:var(--text-dim)">并发参数会参与实际执行，但 Worker 端会应用安全上限以避免把 CPA 接口或 Cloudflare 运行时打满。当前上限：探测 12，维护操作 10。</div>
       <div class="form-row">
+        <div class="form-group">
+          <label>执行频率 Cron (UTC)</label>
+          <input type="text" id="cfg_cron_expression" style="width:100%" placeholder="*/30 * * * *">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="btn btn-outline btn-sm" type="button" onclick="applyCronPreset('*/10 * * * *')">每10分钟</button>
+            <button class="btn btn-outline btn-sm" type="button" onclick="applyCronPreset('*/30 * * * *')">每30分钟</button>
+            <button class="btn btn-outline btn-sm" type="button" onclick="applyCronPreset('0 * * * *')">每小时</button>
+            <button class="btn btn-outline btn-sm" type="button" onclick="applyCronPreset('0 2 * * *')">每天02:00 UTC</button>
+          </div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:6px">实际由 Worker 内部按此 Cron 表达式执行，基础 Cloudflare Trigger 已提升为每分钟触发一次；表达式按 UTC 解释。</div>
+          <div id="cron_expression_hint" style="font-size:12px;color:var(--text-dim);margin-top:4px"></div>
+        </div>
+        <div class="form-group">
+          <label>恢复范围</label>
+          <select id="cfg_reenable_scope" style="width:100%"><option value="signal">signal</option><option value="managed">managed</option></select>
+        </div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label>探测并发</label><input type="number" id="cfg_probe_workers" style="width:100%" min="1"></div>
         <div class="form-group"><label>操作并发</label><input type="number" id="cfg_action_workers" style="width:100%" min="1"></div>
       </div>
@@ -1200,13 +1275,9 @@ export function settingsPage(): string {
       </div>
       <div class="form-row">
         <div class="form-group"><label>限额阈值 (0~1)</label><input type="number" id="cfg_quota_disable_threshold" style="width:100%" step="0.01" min="0" max="1"></div>
-        <div class="form-group">
-          <label>恢复范围</label>
-          <select id="cfg_reenable_scope" style="width:100%"><option value="signal">signal</option><option value="managed">managed</option></select>
-        </div>
+        <div class="form-group"><label>删除 401</label><select id="cfg_delete_401" style="width:100%"><option value="true">是</option><option value="false">否</option></select></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>删除 401</label><select id="cfg_delete_401" style="width:100%"><option value="true">是</option><option value="false">否</option></select></div>
         <div class="form-group"><label>自动恢复</label><select id="cfg_auto_reenable" style="width:100%"><option value="true">是</option><option value="false">否</option></select></div>
       </div>
     </div>
@@ -1240,11 +1311,49 @@ export function settingsPage(): string {
   </div>
 </div>
 <script>
-const configFields = ['base_url','token','target_type','provider','user_agent','probe_workers','action_workers','timeout','retries','delete_retries','quota_action','quota_disable_threshold','reenable_scope','delete_401','auto_reenable','upload_workers','upload_retries','upload_method','upload_force','min_valid_accounts','refill_strategy'];
+const configFields = ['base_url','token','target_type','provider','user_agent','cron_expression','probe_workers','action_workers','timeout','retries','delete_retries','quota_action','quota_disable_threshold','reenable_scope','delete_401','auto_reenable','upload_workers','upload_retries','upload_method','upload_force','min_valid_accounts','refill_strategy'];
 
 function toggleTokenVisibility() {
   const el = document.getElementById('cfg_token');
   el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function cronToHuman(expr) {
+  if (!expr) return '未配置';
+  const p = expr.trim().split(/\s+/);
+  if (p.length < 5) return '格式待校验';
+  const min = p[0], hr = p[1];
+  if (min === '*' && hr === '*') return '每分钟';
+  if (min.indexOf('*/') === 0 && hr === '*') {
+    const n = parseInt(min.slice(2), 10);
+    if (n > 0) return '每 ' + n + ' 分钟';
+  }
+  if (/^\d+$/.test(min) && hr === '*') return '每小时第 ' + min + ' 分钟';
+  if (/^\d+$/.test(min) && /^\d+$/.test(hr)) return '每天 ' + hr.padStart(2, '0') + ':' + min.padStart(2, '0') + ' (UTC)';
+  if (/^\d+$/.test(min) && hr.indexOf('*/') === 0) {
+    const n = parseInt(hr.slice(2), 10);
+    if (n > 0) return '每 ' + n + ' 小时 (第 ' + min + ' 分钟, UTC)';
+  }
+  return expr;
+}
+
+function syncCronExpressionHint() {
+  const el = document.getElementById('cfg_cron_expression');
+  const hint = document.getElementById('cron_expression_hint');
+  if (!el || !hint) return;
+  const expr = el.value.trim();
+  if (!expr) {
+    hint.textContent = '当前未填写 Cron 表达式';
+    return;
+  }
+  hint.textContent = '说明: ' + cronToHuman(expr);
+}
+
+function applyCronPreset(expr) {
+  const el = document.getElementById('cfg_cron_expression');
+  if (!el) return;
+  el.value = expr;
+  syncCronExpressionHint();
 }
 
 async function loadSettings() {
@@ -1279,6 +1388,7 @@ async function loadSettings() {
   if (savedToken) savedToken.textContent = data.token || '未设置';
   if (savedTargetType) savedTargetType.textContent = data.target_type || '未设置';
   if (savedProvider) savedProvider.textContent = data.provider || '未设置';
+  syncCronExpressionHint();
 }
 
 async function saveSettings() {
@@ -1299,7 +1409,7 @@ async function saveSettings() {
     // Reload to show updated values
     await loadSettings();
   } else {
-    document.getElementById('saveResult').innerHTML = '<span style="color:var(--danger)">保存失败</span>';
+    document.getElementById('saveResult').innerHTML = '<span style="color:var(--danger)">' + (data?.error || '保存失败') + '</span>';
   }
   btn.disabled = false;
   setTimeout(() => document.getElementById('saveResult').innerHTML = '', 4000);
@@ -1339,6 +1449,7 @@ async function changePassword() {
     : '<span style="color:var(--danger)">' + (data?.error || '修改失败') + '</span>';
 }
 
+document.getElementById('cfg_cron_expression').addEventListener('input', syncCronExpressionHint);
 loadSettings();
 </script>
 `, 'settings');

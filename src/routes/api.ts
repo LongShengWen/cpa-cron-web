@@ -5,7 +5,7 @@ import {
   handleLogout,
   handleChangePassword,
 } from '../middleware/auth';
-import { loadConfig, saveConfig, validateConfig, loadCacheMeta, loadCronMeta } from '../core/config';
+import { loadConfig, saveConfig, validateConfig, loadCacheMeta, loadCronMeta, saveCronMeta, validateCronExpression } from '../core/config';
 import {
   getDashboardStats,
   getAccounts,
@@ -55,6 +55,7 @@ api.get('/dashboard', async (c) => {
 
 api.get('/config', async (c) => {
   const config = await loadConfig(c.env.DB, c.env);
+  const cron = await loadCronMeta(c.env.DB);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(config)) {
     if (k === 'token') {
@@ -63,17 +64,36 @@ api.get('/config', async (c) => {
       out[k] = String(v);
     }
   }
+  out.cron_expression = cron.cron_expression;
   return c.json(out);
 });
 
 api.put('/config', async (c) => {
   const body = await c.req.json();
+  const cronExpressionRaw = typeof body.cron_expression === 'string' ? body.cron_expression.trim() : '';
+  if ('cron_expression' in body) {
+    delete body.cron_expression;
+  }
   if (body.token && typeof body.token === 'string' && body.token.startsWith('***')) {
     delete body.token;
   }
+  if (cronExpressionRaw) {
+    const cronErrors = validateCronExpression(cronExpressionRaw);
+    if (cronErrors.length > 0) {
+      return c.json({ ok: false, error: cronErrors.join('；') }, 400);
+    }
+  }
   await saveConfig(c.env.DB, body);
+  if (cronExpressionRaw) {
+    await saveCronMeta(c.env.DB, { cron_expression: cronExpressionRaw });
+  }
   const user = c.get('user') as Record<string, unknown>;
-  await logActivity(c.env.DB, 'config_update', '配置已更新', String(user?.username ?? ''));
+  await logActivity(
+    c.env.DB,
+    'config_update',
+    cronExpressionRaw ? `配置已更新 | cron_expression=${cronExpressionRaw}` : '配置已更新',
+    String(user?.username ?? '')
+  );
   return c.json({ ok: true });
 });
 

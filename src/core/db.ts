@@ -364,8 +364,14 @@ export async function updateAccountDisabledState(
   disabled: boolean
 ): Promise<void> {
   await db
-    .prepare("UPDATE auth_accounts SET disabled = ?, updated_at = ?, last_action_status = 'success' WHERE name = ?")
-    .bind(disabled ? 1 : 0, new Date().toISOString(), name)
+    .prepare("UPDATE auth_accounts SET disabled = ?, updated_at = ?, managed_reason = ?, last_action = ?, last_action_status = 'success', last_action_error = NULL WHERE name = ?")
+    .bind(
+      disabled ? 1 : 0,
+      new Date().toISOString(),
+      disabled ? 'manual_disabled' : null,
+      disabled ? 'manual_disable' : 'manual_enable',
+      name
+    )
     .run();
 }
 

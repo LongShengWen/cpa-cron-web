@@ -1,4 +1,5 @@
 import type { AppConfig, Env } from '../types';
+import { isValidCronExpression } from './cron';
 
 export interface CacheMeta {
   cache_base_url: string;
@@ -174,4 +175,13 @@ export async function saveCronMeta(db: D1Database, meta: Partial<CronMeta>): Pro
   if (batch.length > 0) {
     await db.batch(batch);
   }
+}
+
+export function validateCronExpression(expression: string): string[] {
+  const cronExpr = expression.trim();
+  if (!cronExpr) return ['cron_expression 不能为空'];
+  if (!isValidCronExpression(cronExpr)) {
+    return ['cron_expression 格式无效，仅支持 5 段标准 Cron 表达式，按 UTC 生效'];
+  }
+  return [];
 }
