@@ -138,6 +138,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 .toast .material-icons { font-size: 20px; flex-shrink: 0; }
 @keyframes toastIn { from { transform: translateX(120%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(120%); opacity: 0; } }
+/* Tooltip */
+.app-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  display: none;
+  max-width: 320px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(20, 22, 32, .96);
+  border: 1px solid rgba(108, 92, 231, .28);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  backdrop-filter: blur(10px);
+}
+.app-tooltip.show { display: block; }
+.app-tooltip-anchor { cursor: help; }
 /* Pulse animation for active states */
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
 .pulse { animation: pulse 1.5s ease-in-out infinite; }
@@ -200,6 +223,74 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
         setTimeout(function() { toast.remove(); }, 300);
       }, duration);
     };
+  })();
+
+  (function() {
+    const tooltip = document.createElement('div');
+    tooltip.className = 'app-tooltip';
+    document.body.appendChild(tooltip);
+
+    let activeTarget = null;
+
+    function hideTooltip() {
+      activeTarget = null;
+      tooltip.classList.remove('show');
+      tooltip.textContent = '';
+    }
+
+    function positionTooltip(clientX, clientY) {
+      const offset = 14;
+      const rect = tooltip.getBoundingClientRect();
+      let left = clientX + offset;
+      let top = clientY + offset;
+
+      if (left + rect.width > window.innerWidth - 12) {
+        left = Math.max(12, clientX - rect.width - offset);
+      }
+      if (top + rect.height > window.innerHeight - 12) {
+        top = Math.max(12, clientY - rect.height - offset);
+      }
+
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+    }
+
+    function showTooltip(target, clientX, clientY) {
+      const text = target && target.getAttribute ? target.getAttribute('data-tooltip') : '';
+      if (!text) {
+        hideTooltip();
+        return;
+      }
+      activeTarget = target;
+      tooltip.textContent = text;
+      tooltip.classList.add('show');
+      positionTooltip(clientX, clientY);
+    }
+
+    document.addEventListener('mouseover', function(event) {
+      const target = event.target instanceof Element ? event.target.closest('[data-tooltip]') : null;
+      if (!target) {
+        hideTooltip();
+        return;
+      }
+      showTooltip(target, event.clientX, event.clientY);
+    });
+
+    document.addEventListener('mousemove', function(event) {
+      if (!activeTarget) return;
+      positionTooltip(event.clientX, event.clientY);
+    });
+
+    document.addEventListener('mouseout', function(event) {
+      if (!activeTarget) return;
+      const related = event.relatedTarget instanceof Element ? event.relatedTarget : null;
+      if (related && activeTarget.contains(related)) return;
+      const leaving = event.target instanceof Element ? event.target.closest('[data-tooltip]') : null;
+      if (leaving === activeTarget) hideTooltip();
+    });
+
+    window.addEventListener('scroll', hideTooltip, true);
+    window.addEventListener('blur', hideTooltip);
   })();
 
   window.formatChinaTime = function(value) {

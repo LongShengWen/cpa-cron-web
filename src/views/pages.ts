@@ -5,6 +5,73 @@ type AccountsInitialData = {
   total: number;
 };
 
+function escapeHtmlAttr(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function humanizeManagedReason(value: unknown): string {
+  const reason = String(value ?? '').trim();
+  if (!reason) return '';
+  switch (reason) {
+    case 'quota_disabled':
+      return '系统因限额自动禁用';
+    case 'quota_deleted':
+      return '系统因限额自动删除';
+    case 'deleted_401':
+      return '系统因 401 失效自动删除';
+    default:
+      return reason;
+  }
+}
+
+function getAccountStatusReason(row: Record<string, unknown>): string {
+  const lastActionError = String(row.last_action_error ?? '').trim();
+  if (lastActionError) return `操作失败: ${lastActionError}`;
+
+  const probeErrorText = String(row.probe_error_text ?? '').trim();
+  if (probeErrorText) return `探测异常: ${probeErrorText}`;
+
+  const managedReason = humanizeManagedReason(row.managed_reason);
+  if (managedReason) return managedReason;
+
+  if (Number(row.disabled || 0) === 1 && Number(row.is_quota_limited || 0) === 1) {
+    return '当前账号已被系统标记为限额并禁用';
+  }
+  if (Number(row.is_quota_limited || 0) === 1) {
+    return '当前账号已命中限额判定';
+  }
+  if (Number(row.disabled || 0) === 1 && Number(row.is_recovered || 0) === 1) {
+    return '当前账号已恢复，可重新启用';
+  }
+  if (Number(row.is_recovered || 0) === 1) {
+    return '当前账号处于恢复状态';
+  }
+  if (Number(row.is_invalid_401 || 0) === 1) {
+    return '当前账号探测返回 401，认证已失效';
+  }
+  if (Number(row.disabled || 0) === 1) {
+    return '当前账号处于禁用状态';
+  }
+  return '';
+}
+
+function renderAccountStatusBadge(row: Record<string, unknown>): string {
+  const tooltip = escapeHtmlAttr(getAccountStatusReason(row));
+  const tooltipAttr = tooltip ? ` data-tooltip="${tooltip}" class="badge app-tooltip-anchor` : ' class="badge';
+  if (Number(row.is_invalid_401 || 0) === 1) return `<span${tooltipAttr} badge-danger">401</span>`;
+  if (Number(row.disabled || 0) === 1 && Number(row.is_quota_limited || 0) === 1) return `<span${tooltipAttr} badge-warning">限额已禁用</span>`;
+  if (Number(row.is_quota_limited || 0) === 1) return `<span${tooltipAttr} badge-warning">限额</span>`;
+  if (Number(row.disabled || 0) === 1 && Number(row.is_recovered || 0) === 1) return `<span${tooltipAttr} badge-info">可恢复</span>`;
+  if (Number(row.is_recovered || 0) === 1) return `<span${tooltipAttr} badge-info">恢复</span>`;
+  if (Number(row.disabled || 0) === 1) return `<span${tooltipAttr} badge-dim">禁用</span>`;
+  if (row.probe_error_kind) return `<span${tooltipAttr} badge-warning">异常</span>`;
+  return '<span class="badge badge-success">有效</span>';
+}
+
 function formatChinaTimeText(value: unknown): string {
   if (!value) return '-';
   const raw = String(value).trim();
@@ -154,7 +221,7 @@ export function accountsPage(initialData?: AccountsInitialData): string {
     <tr>
       <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${String(r.email || r.account || '-')}</td>
       <td>${String(r.provider || '-')}</td>
-      <td>${Number(r.is_invalid_401 || 0) === 1 ? '<span class="badge badge-danger">401</span>' : Number(r.disabled || 0) === 1 && Number(r.is_quota_limited || 0) === 1 ? '<span class="badge badge-warning">限额已禁用</span>' : Number(r.is_quota_limited || 0) === 1 ? '<span class="badge badge-warning">限额</span>' : Number(r.disabled || 0) === 1 && Number(r.is_recovered || 0) === 1 ? '<span class="badge badge-info">可恢复</span>' : Number(r.is_recovered || 0) === 1 ? '<span class="badge badge-info">恢复</span>' : Number(r.disabled || 0) === 1 ? '<span class="badge badge-dim">禁用</span>' : r.probe_error_kind ? '<span class="badge badge-warning">异常</span>' : '<span class="badge badge-success">有效</span>'}</td>
+      <td>${renderAccountStatusBadge(r)}</td>
       <td>${r.api_status_code != null ? String(r.api_status_code) : '-'}</td>
       <td style="white-space:nowrap;font-size:12px">${formatChinaTimeText(r.updated_at)}</td>
       <td>
@@ -291,14 +358,44 @@ function toggleOrder() {
   loadAccounts();
 }
 function changePage(dir) { currentPage = Math.max(0, currentPage + dir); loadAccounts(); }
+function escapeAttr(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+function humanizeManagedReason(value) {
+  const reason = String(value || '').trim();
+  if (!reason) return '';
+  if (reason === 'quota_disabled') return '系统因限额自动禁用';
+  if (reason === 'quota_deleted') return '系统因限额自动删除';
+  if (reason === 'deleted_401') return '系统因 401 失效自动删除';
+  return reason;
+}
+function statusReason(row) {
+  if (row.last_action_error) return '操作失败: ' + row.last_action_error;
+  if (row.probe_error_text) return '探测异常: ' + row.probe_error_text;
+  const managedReason = humanizeManagedReason(row.managed_reason);
+  if (managedReason) return managedReason;
+  if (row.disabled && row.is_quota_limited) return '当前账号已被系统标记为限额并禁用';
+  if (row.is_quota_limited) return '当前账号已命中限额判定';
+  if (row.disabled && row.is_recovered) return '当前账号已恢复，可重新启用';
+  if (row.is_recovered) return '当前账号处于恢复状态';
+  if (row.is_invalid_401) return '当前账号探测返回 401，认证已失效';
+  if (row.disabled) return '当前账号处于禁用状态';
+  return '';
+}
 function statusBadge(row) {
-  if (row.is_invalid_401) return '<span class="badge badge-danger">401</span>';
-  if (row.disabled && row.is_quota_limited) return '<span class="badge badge-warning">限额已禁用</span>';
-  if (row.is_quota_limited) return '<span class="badge badge-warning">限额</span>';
-  if (row.disabled && row.is_recovered) return '<span class="badge badge-info">可恢复</span>';
-  if (row.is_recovered) return '<span class="badge badge-info">恢复</span>';
-  if (row.disabled) return '<span class="badge badge-dim">禁用</span>';
-  if (row.probe_error_kind) return '<span class="badge badge-warning">异常</span>';
+  const reason = statusReason(row);
+  const tooltipAttr = reason ? ' data-tooltip="' + escapeAttr(reason) + '" class="badge app-tooltip-anchor' : ' class="badge';
+  if (row.is_invalid_401) return '<span' + tooltipAttr + ' badge-danger">401</span>';
+  if (row.disabled && row.is_quota_limited) return '<span' + tooltipAttr + ' badge-warning">限额已禁用</span>';
+  if (row.is_quota_limited) return '<span' + tooltipAttr + ' badge-warning">限额</span>';
+  if (row.disabled && row.is_recovered) return '<span' + tooltipAttr + ' badge-info">可恢复</span>';
+  if (row.is_recovered) return '<span' + tooltipAttr + ' badge-info">恢复</span>';
+  if (row.disabled) return '<span' + tooltipAttr + ' badge-dim">禁用</span>';
+  if (row.probe_error_kind) return '<span' + tooltipAttr + ' badge-warning">异常</span>';
   return '<span class="badge badge-success">有效</span>';
 }
 async function loadAccounts() {
