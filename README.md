@@ -199,6 +199,7 @@ Too many subrequests by single Worker invocation
 
 部署完成后，需要在系统配置页面填写：
 
+- `cron_enabled`
 - `base_url`
 - `token`
 - `target_type`
@@ -217,6 +218,11 @@ Too many subrequests by single Worker invocation
    - Worker 会在每次触发时读取该表达式
    - 只有匹配到当前时间时，才真正执行维护流程
 
+此外还新增了一个独立开关：
+
+- `cron_enabled = true`：允许自动执行定时扫描/维护
+- `cron_enabled = false`：彻底关闭自动定时任务，但**不影响手动扫描、手动维护、手动上传**
+
 默认表达式：
 
 ```text
@@ -230,6 +236,7 @@ Too many subrequests by single Worker invocation
 注意：
 
 - `cron_expression` 按 **UTC** 解释
+- 页面里可以直接开启 / 关闭“定时扫描/维护”
 - 页面里提供了几个快捷选项，例如“每10分钟”“每30分钟”“每小时”“每天 02:00 UTC”
 - 修改 `cron_expression` 后，需要重新部署一次，让 Cloudflare 侧基础 Trigger 使用最新 Worker 代码：
 

@@ -23,6 +23,7 @@ export interface AppConfig {
   token: string;
   target_type: string;
   provider: string;
+  cron_enabled: boolean;
   probe_workers: number;
   action_workers: number;
   timeout: number;

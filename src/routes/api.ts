@@ -48,7 +48,8 @@ api.get('/auth/me', async (c) => {
 api.get('/dashboard', async (c) => {
   const stats = await getDashboardStats(c.env.DB);
   const cron = await loadCronMeta(c.env.DB);
-  return c.json({ ...stats, cron });
+  const config = await loadConfig(c.env.DB, c.env);
+  return c.json({ ...stats, cron: { ...cron, cron_enabled: config.cron_enabled } });
 });
 
 // ── Config ───────────────────────────────────────────────────────────
@@ -87,11 +88,28 @@ api.put('/config', async (c) => {
   if (cronExpressionRaw) {
     await saveCronMeta(c.env.DB, { cron_expression: cronExpressionRaw });
   }
+  if ('cron_enabled' in body) {
+    const cronEnabled = ['true', '1', 'yes', 'on'].includes(String(body.cron_enabled).toLowerCase().trim());
+    if (!cronEnabled) {
+      await saveCronMeta(c.env.DB, {
+        cron_last_result: 'disabled',
+        cron_last_error: '定时任务已关闭',
+      });
+    } else {
+      await saveCronMeta(c.env.DB, {
+        cron_last_error: '',
+      });
+    }
+  }
   const user = c.get('user') as Record<string, unknown>;
   await logActivity(
     c.env.DB,
     'config_update',
-    cronExpressionRaw ? `配置已更新 | cron_expression=${cronExpressionRaw}` : '配置已更新',
+    [
+      '配置已更新',
+      cronExpressionRaw ? `cron_expression=${cronExpressionRaw}` : '',
+      'cron_enabled' in body ? `cron_enabled=${String(body.cron_enabled)}` : '',
+    ].filter(Boolean).join(' | '),
     String(user?.username ?? '')
   );
   return c.json({ ok: true });

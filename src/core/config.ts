@@ -21,13 +21,14 @@ export interface ProbeCursorMeta {
 
 const CONFIG_KEYS: (keyof AppConfig)[] = [
   'base_url', 'token', 'target_type', 'provider',
+  'cron_enabled',
   'probe_workers', 'action_workers', 'timeout', 'retries', 'delete_retries',
   'quota_action', 'quota_disable_threshold', 'delete_401', 'auto_reenable',
   'reenable_scope', 'upload_workers', 'upload_retries', 'upload_method',
   'upload_force', 'min_valid_accounts', 'refill_strategy', 'user_agent',
 ];
 
-const BOOL_KEYS: (keyof AppConfig)[] = ['delete_401', 'auto_reenable', 'upload_force'];
+const BOOL_KEYS: (keyof AppConfig)[] = ['cron_enabled', 'delete_401', 'auto_reenable', 'upload_force'];
 const INT_KEYS: (keyof AppConfig)[] = [
   'probe_workers', 'action_workers', 'timeout', 'retries', 'delete_retries',
   'upload_workers', 'upload_retries', 'min_valid_accounts',
@@ -63,6 +64,7 @@ export async function loadConfig(db: D1Database, env?: Env): Promise<AppConfig> 
     token: (map.get('token') || envToken || '').trim(),
     target_type: (map.get('target_type') || 'codex').trim(),
     provider: (map.get('provider') || '').trim(),
+    cron_enabled: parseBool(map.get('cron_enabled') || 'true'),
     probe_workers: parseIntOrDefault(map.get('probe_workers'), 100),
     action_workers: parseIntOrDefault(map.get('action_workers'), 100),
     timeout: parseIntOrDefault(map.get('timeout'), 15),

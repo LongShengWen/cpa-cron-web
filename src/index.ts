@@ -89,6 +89,16 @@ async function releaseCronLock(kv: KVNamespace): Promise<void> {
 export async function runScheduledMaintain(env: HonoEnv['Bindings'], cronExpression: string): Promise<void> {
   const now = new Date().toISOString();
   const cronMeta = await loadCronMeta(env.DB);
+  const config = await loadConfig(env.DB, env);
+  if (!config.cron_enabled) {
+    if (cronMeta.cron_last_result !== 'disabled' || cronMeta.cron_last_error !== '定时任务已关闭') {
+      await saveCronMeta(env.DB, {
+        cron_last_result: 'disabled',
+        cron_last_error: '定时任务已关闭',
+      });
+    }
+    return;
+  }
   const configuredCronExpr = (cronMeta.cron_expression || '').trim();
   const fallbackCronExpr = cronExpression || '*/30 * * * *';
   const cronExpr = configuredCronExpr || fallbackCronExpr;
@@ -133,7 +143,6 @@ export async function runScheduledMaintain(env: HonoEnv['Bindings'], cronExpress
       // migration may not be ready yet
     }
 
-    const config = await loadConfig(env.DB, env);
     const errors = validateConfig(config);
     if (errors.length > 0) {
       await saveCronMeta(env.DB, {

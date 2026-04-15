@@ -207,9 +207,13 @@ export function dashboardPage(): string {
 
   const cron = data.cron || {};
   const cronSummary = data.cron_summary || {};
+  const cronEnabled = !(cron.cron_enabled === false || String(cron.cron_enabled ?? 'true').toLowerCase() === 'false');
   const cronExpr = cron.cron_expression || '*/30 * * * *';
-  const cronState = cron.cron_last_result || '未运行';
-  const cronBadge = cronState === 'success'
+  const cronStateRaw = cron.cron_last_result || '未运行';
+  const cronState = cronEnabled ? cronStateRaw : '已关闭';
+  const cronBadge = !cronEnabled
+    ? 'badge-dim'
+    : cronState === 'success'
     ? 'badge-success'
     : cronState === 'failed'
       ? 'badge-danger'
@@ -219,6 +223,10 @@ export function dashboardPage(): string {
   document.getElementById('cronStatus').innerHTML = \`
     <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text-dim)">
       <div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <span style="font-weight:600;color:var(--text)">定时任务</span>
+          <span class="badge \${cronEnabled ? 'badge-success' : 'badge-dim'}">\${cronEnabled ? '已开启' : '已关闭'}</span>
+        </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
           <span style="font-weight:600;color:var(--text)">执行频率 (UTC)</span>
           <span class="badge badge-info">\${cronToHuman(cronExpr)}</span>
@@ -233,7 +241,7 @@ export function dashboardPage(): string {
         <div>成功于: \${fmtDashboardTime(cronSummary.last_completed_at)}</div>
         <div>耗时: \${cronSummary.last_duration_seconds != null ? cronSummary.last_duration_seconds + ' 秒' : '-'}</div>
       </div>
-      <div>最近失败原因: \${cron.cron_last_error || '-'}</div>
+      <div>最近状态说明: \${!cronEnabled ? '定时扫描/维护任务已关闭，不会自动执行' : (cron.cron_last_error || '-')}</div>
     </div>
   \`;
 
@@ -1254,6 +1262,14 @@ export function settingsPage(): string {
           <div id="cron_expression_hint" style="font-size:12px;color:var(--text-dim);margin-top:4px"></div>
         </div>
         <div class="form-group">
+          <label>定时扫描/维护</label>
+          <select id="cfg_cron_enabled" style="width:100%">
+            <option value="true">开启</option>
+            <option value="false">关闭</option>
+          </select>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:6px">关闭后不会自动执行定时维护流程，但不影响手动扫描、手动维护和手动上传。</div>
+        </div>
+        <div class="form-group">
           <label>恢复范围</label>
           <select id="cfg_reenable_scope" style="width:100%"><option value="signal">signal</option><option value="managed">managed</option></select>
         </div>
@@ -1311,7 +1327,7 @@ export function settingsPage(): string {
   </div>
 </div>
 <script>
-const configFields = ['base_url','token','target_type','provider','user_agent','cron_expression','probe_workers','action_workers','timeout','retries','delete_retries','quota_action','quota_disable_threshold','reenable_scope','delete_401','auto_reenable','upload_workers','upload_retries','upload_method','upload_force','min_valid_accounts','refill_strategy'];
+const configFields = ['base_url','token','target_type','provider','user_agent','cron_enabled','cron_expression','probe_workers','action_workers','timeout','retries','delete_retries','quota_action','quota_disable_threshold','reenable_scope','delete_401','auto_reenable','upload_workers','upload_retries','upload_method','upload_force','min_valid_accounts','refill_strategy'];
 
 function toggleTokenVisibility() {
   const el = document.getElementById('cfg_token');
