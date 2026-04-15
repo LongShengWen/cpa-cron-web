@@ -854,25 +854,15 @@ function showResult(html) {
 
 export function historyPage(): string {
   return htmlLayout('扫描历史', `
-<div class="table-wrapper" style="margin-bottom:16px">
-  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <span style="font-size:12px;color:var(--text-dim)">支持一键清空全部历史，或按天数保留最近记录。这里的“全部历史”包含扫描历史、操作日志、已完成/失败任务，不影响账号主数据。</span>
-  </div>
-  <div style="padding:16px 20px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
-    <div class="form-group" style="margin:0;min-width:220px">
-      <label>保留最近天数</label>
-      <input type="number" id="historyKeepDays" style="width:100%" min="1" value="30">
-    </div>
-    <button class="btn btn-outline" onclick="cleanupAllHistoryByDays()"><span class="material-icons" style="font-size:16px">history</span> 按天数清理全部历史</button>
-    <button class="btn btn-danger" onclick="cleanupAllHistory()"><span class="material-icons" style="font-size:16px">delete_forever</span> 一键清空全部历史</button>
-    <span id="historyCleanupHint" style="font-size:12px;color:var(--text-dim)">建议先用“按天数清理”，需要彻底归零时再用“一键清空全部历史”。</span>
-  </div>
-</div>
 <div class="table-wrapper">
   <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <strong>扫描运行记录 / 历史清理工具</strong>
-    <span style="font-size:12px;color:var(--text-dim)">支持清空扫描历史，并可顺手清理已完成/失败的任务记录，运行中的任务不会被删除。</span>
+    <span style="font-size:12px;color:var(--text-dim)">系统默认仅保留最近 1 天扫描历史和已完成/失败任务记录，运行中的任务不会被删除。</span>
     <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+      <div class="form-group" style="margin:0;min-width:160px">
+        <label>保留最近天数</label>
+        <input type="number" id="historyKeepDays" style="width:100%" min="1" value="1">
+      </div>
       <button class="btn btn-outline btn-sm" onclick="cleanupScanRunsByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧扫描历史</button>
       <button class="btn btn-outline btn-sm" onclick="cleanupFinishedTasks()"><span class="material-icons" style="font-size:16px">task_alt</span> 清理已完成任务</button>
       <button class="btn btn-danger btn-sm" onclick="cleanupScanRuns()"><span class="material-icons" style="font-size:16px">delete_sweep</span> 清空扫描历史</button>
@@ -959,16 +949,6 @@ async function cleanupFinishedTasks() {
   await cleanupHistory('finished_tasks', '确认清理所有已完成/失败的任务记录吗？运行中任务不会受到影响。');
 }
 
-async function cleanupAllHistory() {
-  await cleanupHistory('all', '确认一键清空全部历史吗？这会删除扫描历史、操作日志、已完成/失败任务记录，且无法恢复。');
-}
-
-async function cleanupAllHistoryByDays() {
-  const keepDays = getKeepDays();
-  if (keepDays == null) return;
-  await cleanupHistory('all', '确认清理 ' + keepDays + ' 天前的全部历史吗？这会同时清理扫描历史、操作日志、已完成/失败任务记录。', keepDays);
-}
-
 load();
 </script>
 `, 'history');
@@ -979,11 +959,11 @@ export function activityPage(): string {
 <div class="table-wrapper">
   <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <strong>操作日志</strong>
-    <span style="font-size:12px;color:var(--text-dim)">可按需清空活动日志，也可以按天数只删除较早日志。</span>
+    <span style="font-size:12px;color:var(--text-dim)">系统默认仅保留最近 1 天操作日志，也可以按需手动立即清理较早日志。</span>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
       <div class="form-group" style="margin:0;min-width:160px">
         <label>保留最近天数</label>
-        <input type="number" id="activityKeepDays" style="width:100%" min="1" value="30">
+        <input type="number" id="activityKeepDays" style="width:100%" min="1" value="1">
       </div>
       <button class="btn btn-outline btn-sm" onclick="cleanupActivityLogByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧日志</button>
       <button class="btn btn-danger btn-sm" onclick="cleanupActivityLog()"><span class="material-icons" style="font-size:16px">delete_sweep</span> 清空操作日志</button>

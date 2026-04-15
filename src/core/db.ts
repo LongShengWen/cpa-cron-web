@@ -19,6 +19,8 @@ const AUTH_ACCOUNT_COLUMNS = [
 
 const DELETE_CHUNK_SIZE = 200;
 const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
+const HISTORY_RETENTION_DAYS = 1;
+const ACTIVITY_LOG_RETENTION_DAYS = 1;
 
 function parseStoredTime(value: unknown): number | null {
   if (typeof value !== 'string') return null;
@@ -53,6 +55,14 @@ async function deleteRowsByIds(
 
 function getCutoffTimestamp(keepDays: number): number {
   return Date.now() - keepDays * 24 * 60 * 60 * 1000;
+}
+
+async function purgeHistoricalRetention(db: D1Database): Promise<void> {
+  await Promise.all([
+    clearScanRunsOlderThanDays(db, HISTORY_RETENTION_DAYS),
+    clearFinishedTasksOlderThanDays(db, HISTORY_RETENTION_DAYS),
+    clearActivityLogOlderThanDays(db, ACTIVITY_LOG_RETENTION_DAYS),
+  ]);
 }
 
 export async function upsertAuthAccounts(
@@ -148,6 +158,7 @@ export async function finishScanRun(
       runId
     )
     .run();
+  await purgeHistoricalRetention(db);
 }
 
 export async function getLastScanRun(db: D1Database): Promise<Record<string, unknown> | null> {
@@ -438,6 +449,7 @@ export async function logActivity(
     .prepare('INSERT INTO activity_log (action, detail, username) VALUES (?, ?, ?)')
     .bind(action, detail, username ?? null)
     .run();
+  await purgeHistoricalRetention(db);
 }
 
 export async function getActivityLog(
@@ -523,6 +535,7 @@ export async function updateTask(
   if (sets.length === 0) return;
   vals.push(id);
   await db.prepare(`UPDATE task_queue SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+  await purgeHistoricalRetention(db);
 }
 
 export async function getRecentTasks(
