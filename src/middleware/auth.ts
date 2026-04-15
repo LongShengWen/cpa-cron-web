@@ -139,6 +139,7 @@ export function authMiddleware() {
 
     // Public routes that don't need auth
     if (
+      path === '/healthz' ||
       path === '/login' ||
       path === '/favicon.ico' ||
       path === '/api/auth/login' ||

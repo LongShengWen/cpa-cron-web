@@ -230,8 +230,19 @@ api.post('/accounts/:name/toggle', async (c) => {
 // ── Operations (async via waitUntil) ─────────────────────────────────
 
 /** Helper: get ExecutionContext from c.executionCtx */
-function getCtx(c: { executionCtx: ExecutionContext }): ExecutionContext {
-  return c.executionCtx;
+function getCtx(c: { executionCtx?: ExecutionContext | undefined }): ExecutionContext {
+  if (c.executionCtx) return c.executionCtx;
+  return {
+    waitUntil(promise: Promise<unknown>) {
+      void promise.catch((error) => {
+        console.error('Background task failed:', error);
+      });
+    },
+    passThroughOnException() {
+      // Node/Docker runtime fallback: nothing to do.
+    },
+    props: undefined,
+  } as ExecutionContext;
 }
 
 api.post('/operations/scan', async (c) => {

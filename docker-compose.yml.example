@@ -1,0 +1,19 @@
+services:
+  cpa-cron-web:
+    build: .
+    container_name: cpa-cron-web
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      ENABLE_CRON: "true"
+      SQLITE_PATH: "/data/cpa-cron-web.db"
+      JWT_SECRET: "please-change-this-secret"
+      ADMIN_USERNAME: "admin"
+      ADMIN_PASSWORD: "please-change-this-password"
+      CPA_BASE_URL: "http://192.168.2.1"
+      CPA_TOKEN: ""
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

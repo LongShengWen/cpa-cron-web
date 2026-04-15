@@ -9,7 +9,7 @@ import { createTask, logActivity, updateTask } from './core/db';
 import { runMaintain } from './core/engine';
 import { matchesCronExpression } from './core/cron';
 
-const app = new Hono<HonoEnv>();
+export const app = new Hono<HonoEnv>();
 
 // Force UTF-8 for all responses to avoid garbled Chinese text
 app.use('*', async (c, next) => {
@@ -41,6 +41,8 @@ app.use('*', async (c, next) => {
   }
   return next();
 });
+
+app.get('/healthz', (c) => c.json({ ok: true }));
 
 // Auth middleware (skips /login and /api/auth/login)
 app.use('*', authMiddleware());
@@ -84,7 +86,7 @@ async function releaseCronLock(kv: KVNamespace): Promise<void> {
   try { await kv.delete(CRON_LOCK_KEY); } catch { /* best-effort */ }
 }
 
-async function runScheduledMaintain(env: HonoEnv['Bindings'], cronExpression: string): Promise<void> {
+export async function runScheduledMaintain(env: HonoEnv['Bindings'], cronExpression: string): Promise<void> {
   const now = new Date().toISOString();
   const cronMeta = await loadCronMeta(env.DB);
   const configuredCronExpr = (cronMeta.cron_expression || '').trim();

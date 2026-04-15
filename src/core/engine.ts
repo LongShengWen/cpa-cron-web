@@ -32,7 +32,7 @@ import {
   deleteAccountsFromDB,
   deleteAccountsNotInSet,
 } from './db';
-import { saveCacheMeta } from './config';
+import { loadProbeCursor, saveCacheMeta, saveProbeCursor } from './config';
 
 // ── constants ────────────────────────────────────────────────────────
 
@@ -45,6 +45,11 @@ const DEFAULT_UPLOAD_CONCURRENCY = 5;
 const MAX_PROBE_CONCURRENCY = 12;
 const MAX_ACTION_CONCURRENCY = 10;
 const MAX_UPLOAD_CONCURRENCY = 8;
+const MAX_SCAN_PROBE_RECORDS_PER_RUN = 25;
+const MAX_MANUAL_MAINTAIN_PROBE_RECORDS_PER_RUN = 6;
+const MAX_CRON_MAINTAIN_PROBE_RECORDS_PER_RUN = 10;
+const DEFAULT_SCAN_PROBE_CURSOR_KEY = 'scan_probe_cursor';
+const DEFAULT_MAINTAIN_PROBE_CURSOR_KEY = 'maintain_probe_cursor';
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -57,6 +62,44 @@ function chunks<T>(arr: T[], size: number): T[][] {
 function boundedConcurrency(value: number, fallback: number, max: number): number {
   if (!Number.isFinite(value) || value < 1) return fallback;
   return Math.min(Math.max(1, Math.floor(value)), max);
+}
+
+function normalizePositiveInt(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) return fallback;
+  return Math.max(1, Math.floor(value));
+}
+
+function selectRotatingRecords<T>(
+  records: T[],
+  limit: number,
+  cursor: number
+): {
+  selected: T[];
+  start: number;
+  nextCursor: number;
+  partial: boolean;
+} {
+  const total = records.length;
+  if (total === 0) {
+    return { selected: [], start: 0, nextCursor: 0, partial: false };
+  }
+
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (total <= normalizedLimit) {
+    return { selected: records.slice(), start: 0, nextCursor: 0, partial: false };
+  }
+
+  const start = cursor % total;
+  const selected: T[] = [];
+  for (let i = 0; i < normalizedLimit; i++) {
+    selected.push(records[(start + i) % total]);
+  }
+  return {
+    selected,
+    start,
+    nextCursor: (start + normalizedLimit) % total,
+    partial: true,
+  };
 }
 
 function summarizeActionResults(results: Array<{ name: string; ok: boolean; error: string | null }>): {
@@ -143,6 +186,14 @@ export interface EngineResult {
     deleted_quota: number;
     reenabled: number;
   };
+  probe_scope?: {
+    total_candidates: number;
+    selected_count: number;
+    partial: boolean;
+    cursor_key?: string;
+    next_cursor?: number;
+  };
+  probed_names?: string[];
   upload?: {
     uploaded: number;
     skipped: number;
@@ -221,9 +272,11 @@ export async function runScan(
   config: AppConfig,
   taskId: number,
   username?: string,
-  options?: { finalizeTask?: boolean }
+  options?: { finalizeTask?: boolean; maxProbeRecords?: number; cursorKey?: string }
 ): Promise<EngineResult> {
   const finalizeTask = options?.finalizeTask !== false;
+  const cursorKey = (options?.cursorKey || DEFAULT_SCAN_PROBE_CURSOR_KEY).trim() || DEFAULT_SCAN_PROBE_CURSOR_KEY;
+  const maxProbeRecords = normalizePositiveInt(options?.maxProbeRecords, MAX_SCAN_PROBE_RECORDS_PER_RUN);
   const runId = await startScanRun(db, 'scan', config as unknown as Record<string, unknown>);
   let totalFiles = 0;
   let filteredCount = 0;
@@ -232,6 +285,9 @@ export async function runScan(
   let quotaCount = 0;
   let recoveredCount = 0;
   let failureCount = 0;
+  let probeNames: string[] = [];
+  let probePartial = false;
+  let nextProbeCursor = 0;
 
   try {
     await ensureTaskNotCancelled(db, taskId);
@@ -277,15 +333,27 @@ export async function runScan(
 
     const total = candidateRecords.length;
     filteredCount = total;
+    const storedProbeCursor = (await loadProbeCursor(db, cursorKey)).cursor;
+    const probeWindow = selectRotatingRecords(candidateRecords, maxProbeRecords, storedProbeCursor);
+    const probeTargets = probeWindow.selected;
+    probeNames = probeTargets.map((record) => String(record.name)).filter(Boolean);
+    probePartial = probeWindow.partial;
+    nextProbeCursor = probeWindow.nextCursor;
     await updateTask(db, taskId, {
       total,
       progress: 0,
-      result: JSON.stringify({ phase: 'probing', total_files: totalFiles, filtered: total }),
+      result: JSON.stringify({
+        phase: 'probing',
+        total_files: totalFiles,
+        filtered: total,
+        selected: probeTargets.length,
+        partial: probePartial,
+      }),
     });
 
     // Phase 2 — probe in batches
     let probed = 0;
-    const batches = chunks(candidateRecords, PROBE_BATCH_SIZE);
+    const batches = chunks(probeTargets, PROBE_BATCH_SIZE);
 
     for (const batch of batches) {
       await ensureTaskNotCancelled(db, taskId);
@@ -314,13 +382,21 @@ export async function runScan(
       probedFiles = probed;
       await updateTask(db, taskId, {
         progress: probed,
-        result: JSON.stringify({ phase: 'probing', probed, total_files: totalFiles, filtered: total }),
+        result: JSON.stringify({
+          phase: 'probing',
+          probed,
+          total_files: totalFiles,
+          filtered: total,
+          selected: probeTargets.length,
+          partial: probePartial,
+        }),
       });
     }
 
     // Phase 3 — classify
+    const probeNameSet = new Set(probeNames);
     const currentCandidates = inventoryRecords.filter((r) =>
-      matchesFilters(r, config.target_type, config.provider)
+      probeNameSet.has(String(r.name))
     );
     const invalidRecords = currentCandidates.filter((r) => r.is_invalid_401 === 1);
     const quotaRecords = currentCandidates.filter((r) => r.is_quota_limited === 1);
@@ -335,7 +411,7 @@ export async function runScan(
     await finishScanRun(db, runId, {
       status: 'success',
       total_files: totalFiles,
-      filtered_files: currentCandidates.length,
+      filtered_files: total,
       probed_files: probedFiles,
       invalid_401_count: invalidRecords.length,
       quota_limited_count: quotaRecords.length,
@@ -348,16 +424,25 @@ export async function runScan(
       cache_last_status: 'success',
       cache_last_error: '',
     });
+    await saveProbeCursor(db, cursorKey, nextProbeCursor);
 
     const engineResult: EngineResult = {
       success: true,
       total_files: totalFiles,
-      filtered_count: currentCandidates.length,
+      filtered_count: total,
       probed_count: probedFiles,
       invalid_401_count: invalidRecords.length,
       quota_limited_count: quotaRecords.length,
       recovered_count: recoveredRecords.length,
       failure_count: failureCount,
+      probe_scope: {
+        total_candidates: total,
+        selected_count: probeTargets.length,
+        partial: probePartial,
+        cursor_key: cursorKey,
+        next_cursor: nextProbeCursor,
+      },
+      probed_names: probeNames,
     };
 
     if (finalizeTask) {
@@ -372,7 +457,7 @@ export async function runScan(
     await logActivity(
       db,
       'scan',
-      `扫描完成: 总计=${totalFiles} 过滤=${currentCandidates.length} 401=${invalidRecords.length} 限额=${quotaRecords.length} 恢复=${recoveredRecords.length} 清理旧缓存=${deletedStaleCount}`,
+      `扫描完成: 总计=${totalFiles} 候选=${total} 本次探测=${probeTargets.length} 401=${invalidRecords.length} 限额=${quotaRecords.length} 恢复=${recoveredRecords.length} 清理旧缓存=${deletedStaleCount}${probePartial ? ` | 已启用轮转探测 next_cursor=${nextProbeCursor}` : ''}`,
       username
     );
 
@@ -439,7 +524,14 @@ export async function runMaintain(
     });
 
     // Create a sub-task for scan progress tracking
-    const scanResult = await runScan(db, config, taskId, username, { finalizeTask: false });
+    const maintainProbeLimit = username === 'system'
+      ? MAX_CRON_MAINTAIN_PROBE_RECORDS_PER_RUN
+      : MAX_MANUAL_MAINTAIN_PROBE_RECORDS_PER_RUN;
+    const scanResult = await runScan(db, config, taskId, username, {
+      finalizeTask: false,
+      maxProbeRecords: maintainProbeLimit,
+      cursorKey: DEFAULT_MAINTAIN_PROBE_CURSOR_KEY,
+    });
     if (!scanResult.success) {
       await updateTask(db, taskId, {
         status: 'failed', finished_at: new Date().toISOString(), error: scanResult.error || 'scan failed',
@@ -455,8 +547,10 @@ export async function runMaintain(
     });
 
     const existingState = await loadExistingState(db);
+    const probedNameSet = new Set((scanResult.probed_names || []).map((name) => String(name)).filter(Boolean));
     const candidateRecords = Array.from(existingState.values()).filter((r) =>
       matchesFilters(r, config.target_type, config.provider)
+      && (probedNameSet.size === 0 || probedNameSet.has(String(r.name)))
     );
     const invalidRecords = candidateRecords.filter((r) => Number(r.is_invalid_401) === 1);
     const quotaRecords = candidateRecords.filter(
@@ -467,7 +561,7 @@ export async function runMaintain(
     await logActivity(
       db,
       'maintain_started',
-      `维护开始: 候选=${candidateRecords.length} 401=${invalidRecords.length} 限额=${quotaRecords.length} 恢复候选=${recoveredRecords.length} quota_action=${config.quota_action} delete_401=${config.delete_401 ? 1 : 0} auto_reenable=${config.auto_reenable ? 1 : 0}`,
+      `维护开始: 本次探测=${candidateRecords.length}/${scanResult.filtered_count} 401=${invalidRecords.length} 限额=${quotaRecords.length} 恢复候选=${recoveredRecords.length} quota_action=${config.quota_action} delete_401=${config.delete_401 ? 1 : 0} auto_reenable=${config.auto_reenable ? 1 : 0}${scanResult.probe_scope?.partial ? ` | 轮转探测 next_cursor=${scanResult.probe_scope.next_cursor ?? 0}` : ''}`,
       username
     );
 
@@ -671,6 +765,7 @@ export async function runMaintain(
     const finalState = await loadExistingState(db);
     const finalCandidates = Array.from(finalState.values()).filter((r) =>
       matchesFilters(r, config.target_type, config.provider)
+      && (probedNameSet.size === 0 || probedNameSet.has(String(r.name)))
     );
     const finalInvalidRecords = finalCandidates.filter((r) => Number(r.is_invalid_401) === 1);
     const finalQuotaRecords = finalCandidates.filter((r) => Number(r.is_quota_limited) === 1);
@@ -682,7 +777,7 @@ export async function runMaintain(
     await finishScanRun(db, maintainRunId, {
       status: 'success',
       total_files: scanResult.total_files,
-      filtered_files: finalCandidates.length,
+      filtered_files: scanResult.filtered_count,
       probed_files: finalProbedFiles,
       invalid_401_count: finalInvalidRecords.length,
       quota_limited_count: finalQuotaRecords.length,
@@ -692,13 +787,15 @@ export async function runMaintain(
     const engineResult: EngineResult = {
       success: true,
       total_files: scanResult.total_files,
-      filtered_count: finalCandidates.length,
+      filtered_count: scanResult.filtered_count,
       probed_count: finalProbedFiles,
       invalid_401_count: finalInvalidRecords.length,
       quota_limited_count: finalQuotaRecords.length,
       recovered_count: finalRecoveredRecords.length,
       failure_count: finalFailureRecords.length,
       actions: { deleted_401: deleted401, disabled_quota: disabledQuota, deleted_quota: deletedQuota, reenabled },
+      probe_scope: scanResult.probe_scope,
+      probed_names: scanResult.probed_names,
     };
 
     await updateTask(db, taskId, {
@@ -707,7 +804,7 @@ export async function runMaintain(
     });
 
     await logActivity(db, 'maintain',
-      `维护完成: 删除401=${deleted401} 删除本地=${deletedLocal} 禁用限额=${disabledQuota} 删除限额=${deletedQuota} 恢复=${reenabled} 剩余401=${finalInvalidRecords.length} 剩余限额=${finalQuotaRecords.length}`,
+      `维护完成: 本次探测=${candidateRecords.length}/${scanResult.filtered_count} 删除401=${deleted401} 删除本地=${deletedLocal} 禁用限额=${disabledQuota} 删除限额=${deletedQuota} 恢复=${reenabled} 剩余401=${finalInvalidRecords.length} 剩余限额=${finalQuotaRecords.length}${scanResult.probe_scope?.partial ? ` | 轮转探测 next_cursor=${scanResult.probe_scope.next_cursor ?? 0}` : ''}`,
       username
     );
 

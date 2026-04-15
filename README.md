@@ -1,6 +1,13 @@
 # cpa-cron-web
 
-`cpa-cron-web` 是一个运行在 Cloudflare Workers 上的 CPA 账号运维面板，用于扫描账号状态、清理失效账号、处理限额账号、恢复可用账号，并通过仪表盘、任务记录和活动日志展示整个维护过程。
+`cpa-cron-web` 是一个 CPA 账号运维面板，用于扫描账号状态、清理失效账号、处理限额账号、恢复可用账号，并通过仪表盘、任务记录和活动日志展示整个维护过程。
+
+> 当前版本：**v1.2.0**
+
+当前版本同时支持两种运行方式：
+
+- **Cloudflare Workers 部署**
+- **Docker / Node.js 部署**
 
 它适合已经拥有 CPA 管理接口的场景，不是通用的账号管理系统。
 
@@ -15,15 +22,16 @@
 - 支持手动上传账号文件与补充账号池
 - 提供仪表盘、账号列表、任务队列、扫描历史、活动日志
 - 支持 Cloudflare Cron 定时执行维护
-- 支持本地开发与 Cloudflare Workers 部署
+- 支持 Docker / Node.js 本地或服务器部署
+- Docker 模式下使用本地 SQLite + 本地 KV 仿真层，不受 Cloudflare Worker 单次 invocation subrequests 限制
+- 扫描 / 维护已内置轮转探测，避免单次任务把远端探测请求打满
 
 ## 技术栈
 
-- Cloudflare Workers
 - Hono
-- Cloudflare D1
-- Cloudflare KV
 - TypeScript
+- Cloudflare Workers + D1 + KV
+- Docker / Node.js + SQLite 本地适配层
 
 ## 项目结构
 
@@ -42,11 +50,16 @@ cpa-cron-web/
 │   ├── routes/
 │   │   ├── api.ts            # REST API 路由
 │   │   └── pages.ts          # 页面路由
+│   ├── runtime/
+│   │   ├── local-platform.ts # Docker/Node 下的 SQLite + KV 兼容层
+│   │   └── node-server.ts    # Docker/Node HTTP 服务入口 + 定时调度
 │   └── views/
 │       ├── layout.ts         # HTML 布局 + 全局样式
 │       └── pages.ts          # 各页面 HTML + JS
 ├── migrations/
 │   └── 0001_init.sql         # D1 数据库 Schema
+├── Dockerfile
+├── docker-compose.yml.example
 ├── wrangler.toml             # Cloudflare Workers 配置
 ├── tsconfig.json
 └── package.json
@@ -65,6 +78,8 @@ cpa-cron-web/
 如果这些接口不可用，页面仍可访问，但扫描、维护、上传和定时任务无法正常工作。
 
 ## 快速开始
+
+### 方案 A：Cloudflare Workers
 
 安装依赖：
 
@@ -90,6 +105,73 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
+### 方案 B：Docker / Node.js
+
+要求：
+
+- Node.js **20+**
+- Docker（如果使用容器部署）
+
+直接用 Node.js 启动：
+
+```bash
+npm install
+JWT_SECRET=please-change-me ADMIN_PASSWORD=admin123 npm run docker:start
+```
+
+默认行为：
+
+- 监听 `0.0.0.0:8787`
+- SQLite 数据库文件在 `/data/cpa-cron-web.db`
+- 会自动执行 `migrations/*.sql`
+- 会自动启动“每分钟 tick 一次”的本地调度器，再由系统配置中的 `cron_expression` 决定是否真正执行维护
+
+也可以用 Docker 启动：
+
+```bash
+docker build -t cpa-cron-web .
+docker run -d \
+  --name cpa-cron-web \
+  -p 8787:8787 \
+  -e JWT_SECRET=please-change-me \
+  -e ADMIN_PASSWORD=admin123 \
+  -e CPA_BASE_URL=http://192.168.2.1 \
+  -e CPA_TOKEN=your-token \
+  -v $(pwd)/data:/data \
+  cpa-cron-web
+```
+
+如果更习惯 Compose：
+
+```bash
+cp docker-compose.yml.example docker-compose.yml
+docker compose up -d --build
+```
+
+首次启动后可通过以下地址确认服务是否正常：
+
+- 面板首页：`http://127.0.0.1:8787`
+- 健康检查：`http://127.0.0.1:8787/healthz`
+
+## 部署模式对比
+
+| 维度 | Cloudflare Workers | Docker / Node.js |
+|---|---|---|
+| 运行时 | Cloudflare Worker | Node.js 20+ |
+| 数据存储 | D1 + KV | SQLite + 本地 KV 仿真 |
+| 定时任务 | Cloudflare Cron Trigger | 进程内每分钟 tick + `cron_expression` |
+| 子请求限制 | 受 Worker invocation subrequests 限制 | 不受 Worker subrequests 限制 |
+| 部署方式 | `wrangler deploy` | `docker run` / `docker compose up -d` |
+| 适合场景 | 已在 Cloudflare 体系内 | 自建服务器 / NAS / 本地常驻 |
+
+如果你的账号量较大、维护任务较密，或者经常遇到 Cloudflare Worker 的：
+
+```text
+Too many subrequests by single Worker invocation
+```
+
+那么更建议使用 **Docker / Node.js 部署**。
+
 ## 配置说明
 
 ### 环境变量
@@ -100,12 +182,18 @@ npm run dev
 - `ADMIN_USERNAME`: 可选，首个管理员用户名，默认值为 `admin`
 - `ADMIN_PASSWORD`: 推荐，首个管理员密码
 - `ADMIN_PASSWORD_HASH`: 可选，管理员密码哈希；如果提供则优先使用
+- `SQLITE_PATH`: 仅 Docker / Node.js 模式使用，本地 SQLite 数据库文件路径，默认 `/data/cpa-cron-web.db`
+- `HOST`: 仅 Docker / Node.js 模式使用，默认 `0.0.0.0`
+- `PORT`: 仅 Docker / Node.js 模式使用，默认 `8787`
+- `ENABLE_CRON`: 仅 Docker / Node.js 模式使用，默认 `true`
 
 说明：
 
 - 系统不会再自动创建固定默认密码管理员
 - 只有在提供 `ADMIN_PASSWORD` 或 `ADMIN_PASSWORD_HASH` 时，才会自动初始化首个管理员
 - 数据库未保存 `base_url` / `token` 时，可回退到 `CPA_BASE_URL` / `CPA_TOKEN`
+- Docker / Node.js 模式下，`JWT_SECRET` 同样必须设置，否则登录鉴权无法工作
+- Docker / Node.js 模式建议显式挂载 `/data`，否则容器重建后 SQLite 数据会丢失
 
 ### 面板配置
 
@@ -155,6 +243,25 @@ npm run deploy
 - `*/30 * * * *`：每 30 分钟
 - `0 * * * *`：每小时
 - `0 2 * * *`：每天 02:00 UTC
+
+### 轮转探测说明
+
+为避免单次任务中过多远端探测请求，当前版本已将探测改为**轮转分批执行**：
+
+- 手动扫描：单次最多探测 `25` 个候选账号
+- 手动维护：单次最多探测 `6` 个候选账号
+- 自动 Cron 维护：单次最多探测 `10` 个候选账号
+
+系统会在 `app_config` 中记录游标：
+
+- `scan_probe_cursor`
+- `maintain_probe_cursor`
+
+下一次任务会自动从上次游标后继续探测，因此不是永远只扫前面一批账号。
+
+> 说明：  
+> 这层轮转探测在 Cloudflare Workers 和 Docker / Node.js 两种模式下都会生效。  
+> 其中 Docker / Node.js 模式不再受 Cloudflare Worker 的 subrequests 限制，但仍建议保留轮转策略，避免一次任务对 CPA 管理接口打出过高瞬时压力。
 
 ### 账号状态原因说明
 
@@ -286,6 +393,88 @@ crons = ["* * * * *"]
 
 Cron 执行前会通过 KV 获取分布式锁（`cron:maintain:lock`，TTL 5 分钟），防止任务重叠执行。如果上一次 Cron 仍在运行，新的触发会自动跳过并记录日志。
 
+## Docker / Node.js 部署
+
+### 运行原理
+
+Docker 模式下不会走 Cloudflare Worker 运行时，而是：
+
+- 使用 `@hono/node-server` 启动 HTTP 服务
+- 使用 `better-sqlite3` 承担本地数据库
+- 通过 `src/runtime/local-platform.ts` 模拟 D1 / KV 所需的最小接口
+- 通过本地每分钟 tick 调用同一套 `runScheduledMaintain(...)` 逻辑
+
+因此：
+
+- 页面、API、扫描、维护、上传逻辑与 Worker 版本保持一致
+- 不再受 Worker 单次 invocation 的 subrequests 限制
+- 但仍然会受到你自己的机器资源、网络质量，以及 CPA 管理端本身限流策略影响
+
+### 数据持久化
+
+Docker 模式下，数据库默认写入：
+
+```text
+/data/cpa-cron-web.db
+```
+
+因此建议始终挂载宿主机目录：
+
+```bash
+-v $(pwd)/data:/data
+```
+
+否则：
+
+- 容器删除后，账号缓存、活动日志、任务记录、系统配置都会一起丢失
+
+### 升级方式
+
+如果你使用 Docker 部署，升级到新版本时建议：
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+或：
+
+```bash
+docker build -t cpa-cron-web .
+docker rm -f cpa-cron-web
+docker run -d ... cpa-cron-web
+```
+
+只要 `/data` 做了持久化挂载，SQLite 数据会保留。
+
+### Docker 环境变量示例
+
+```bash
+JWT_SECRET=please-change-me
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin123456
+CPA_BASE_URL=http://192.168.2.1
+CPA_TOKEN=replace-me
+PORT=8787
+HOST=0.0.0.0
+SQLITE_PATH=/data/cpa-cron-web.db
+ENABLE_CRON=true
+```
+
+### 健康检查
+
+Docker / Node.js 模式可直接访问：
+
+```text
+GET /healthz
+```
+
+返回：
+
+```json
+{"ok":true}
+```
+
 ## 本地验证 Cron
 
 本地 `wrangler dev` 不会自动执行定时任务，可以手动触发：
@@ -299,6 +488,13 @@ curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled"
 - `/api/dashboard`
 - `/api/tasks`
 - `/api/activity`
+
+Docker / Node.js 模式下不需要这个特殊触发地址，进程启动后会自动每分钟 tick 一次。  
+如果只是想验证服务是否活着，可以直接访问：
+
+```bash
+curl http://127.0.0.1:8787/healthz
+```
 
 ## 安全说明
 
@@ -315,6 +511,7 @@ npm install
 npm run db:migrate
 npx tsc --noEmit
 npm run dev
+npm run docker:start
 ```
 
 ## 许可证

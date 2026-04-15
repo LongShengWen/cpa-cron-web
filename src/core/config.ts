@@ -15,6 +15,10 @@ export interface CronMeta {
   cron_last_error: string;
 }
 
+export interface ProbeCursorMeta {
+  cursor: number;
+}
+
 const CONFIG_KEYS: (keyof AppConfig)[] = [
   'base_url', 'token', 'target_type', 'provider',
   'probe_workers', 'action_workers', 'timeout', 'retries', 'delete_retries',
@@ -184,4 +188,19 @@ export function validateCronExpression(expression: string): string[] {
     return ['cron_expression 格式无效，仅支持 5 段标准 Cron 表达式，按 UTC 生效'];
   }
   return [];
+}
+
+export async function loadProbeCursor(db: D1Database, key: string): Promise<ProbeCursorMeta> {
+  const row = await db.prepare('SELECT value FROM app_config WHERE key = ?').bind(key).first<{ value: string }>();
+  const parsed = Number.parseInt(String(row?.value || '').trim(), 10);
+  return {
+    cursor: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0,
+  };
+}
+
+export async function saveProbeCursor(db: D1Database, key: string, cursor: number): Promise<void> {
+  const safeCursor = Number.isFinite(cursor) && cursor >= 0 ? Math.floor(cursor) : 0;
+  await db.prepare(
+    "INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+  ).bind(key, String(safeCursor)).run();
 }
