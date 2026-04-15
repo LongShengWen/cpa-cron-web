@@ -123,7 +123,7 @@ function statusMessageIndicatesQuota(record: Record<string, unknown>): boolean {
 function statusMessageIndicatesInvalid(record: Record<string, unknown>): boolean {
   const raw = String(record.status_message ?? '').trim();
   if (!raw) return false;
-  return /(unauthorized|401|invalid token|token expired|expired|payment_required|not_found)/i.test(raw);
+  return /(unauthorized|401|invalid token|token expired|expired|payment_required|not_found|invalidated|authentication token|sign(?:ed)? in again|signing in again|login again|log in again)/i.test(raw);
 }
 
 function getProbePriority(record: Record<string, unknown>): number {

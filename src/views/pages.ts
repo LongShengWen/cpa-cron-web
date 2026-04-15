@@ -276,6 +276,7 @@ export function accountsPage(initialData?: AccountsInitialData): string {
       <td>${r.api_status_code != null ? String(r.api_status_code) : '-'}</td>
       <td style="white-space:nowrap;font-size:12px">${formatChinaTimeText(r.updated_at)}</td>
       <td>
+        <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'${encodeURIComponent(String(r.name || ''))}')">维护</button>
         <button class="btn btn-sm ${Number(r.disabled || 0) === 1 ? 'btn-primary' : 'btn-outline'}" onclick="toggleAccount('${encodeURIComponent(String(r.name || ''))}',${Number(r.disabled || 0) !== 1})">${Number(r.disabled || 0) === 1 ? '启用' : '禁用'}</button>
         <button class="btn btn-danger btn-sm" onclick="deleteAcc('${encodeURIComponent(String(r.name || ''))}')">删除</button>
       </td>
@@ -289,7 +290,7 @@ export function accountsPage(initialData?: AccountsInitialData): string {
     <span id="accountsProbeTime">最近探测: -</span>
     <span id="accountsTaskState">当前任务: 空闲</span>
     <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
-    <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 主动维护</button>
+    <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 维护</button>
     <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
     <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务</button>
   </div>
@@ -496,11 +497,44 @@ async function loadAccounts() {
       <td>\${r.api_status_code!=null?r.api_status_code:'-'}</td>
       <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.updated_at)}</td>
       <td>
+        <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'\${encodeURIComponent(r.name)}')">维护</button>
         <button class="btn btn-sm \${r.disabled?'btn-primary':'btn-outline'}" onclick="toggleAccount('\${encodeURIComponent(r.name)}',\${!r.disabled})">\${r.disabled?'启用':'禁用'}</button>
         <button class="btn btn-danger btn-sm" onclick="deleteAcc('\${encodeURIComponent(r.name)}')">删除</button>
       </td>
     </tr>
   \`).join('');
+}
+function humanizeSingleMaintainAction(action) {
+  if (action === 'disable_invalid' || action === 'mark_invalid_disabled') return '已按 401 / 失效规则禁用';
+  if (action === 'delete_invalid') return '已按 401 / 失效规则删除';
+  if (action === 'disable_quota' || action === 'mark_quota_disabled') return '已按限额规则禁用';
+  if (action === 'delete_quota') return '已按限额规则删除';
+  if (action === 'reenable') return '账号已恢复并重新启用';
+  if (action === 'refresh_only') return '已刷新状态，无需额外处理';
+  return action || '维护完成';
+}
+async function maintainAccount(btn, name) {
+  if (!confirm('确认维护当前账号？会立即重新探测该账号状态，并按当前配置执行禁用 / 恢复 / 删除逻辑。')) return;
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px"></div> 处理中';
+  try {
+    const data = await api('/accounts/' + name + '/maintain', { method: 'POST' });
+    if (!data || !data.ok) {
+      const msg = data?.error || '维护失败';
+      showAlert('单账号维护失败：' + msg, 'danger');
+      if (window.showToast) window.showToast('单账号维护失败：' + msg, 'danger', 5000);
+      return;
+    }
+    const summary = humanizeSingleMaintainAction(data.action);
+    showAlert('单账号维护完成：' + summary + (data.name ? '（' + decodeURIComponent(name) + '）' : ''), 'success');
+    if (window.showToast) window.showToast('单账号维护完成：' + summary, 'success', 4000);
+    await loadAccounts();
+    await refreshAccountMeta();
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
 }
 async function toggleAccount(name, disabled) {
   if (!confirm(disabled ? '确认禁用此账号？' : '确认启用此账号？')) return;
@@ -538,8 +572,8 @@ function getQuickTaskMeta(type) {
   if (type === 'maintain') {
     return {
       buttonId: 'quickMaintainBtn',
-      defaultHtml: '<span class="material-icons" style="font-size:16px">build</span> 主动维护',
-      runningLabel: '主动维护',
+      defaultHtml: '<span class="material-icons" style="font-size:16px">build</span> 维护',
+      runningLabel: '维护',
       doneLabel: '维护',
       requestPath: '/operations/maintain',
     };
@@ -565,7 +599,7 @@ function setQuickTaskRunningState(taskId, running, type) {
   scanMaintainBtn.disabled = !!running;
   if (!running) {
     scanBtn.innerHTML = '<span class="material-icons" style="font-size:16px">sync</span> 立即扫描';
-    maintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">build</span> 主动维护';
+    maintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">build</span> 维护';
     scanMaintainBtn.innerHTML = '<span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护';
   }
   cancelBtn.style.display = running ? 'inline-flex' : 'none';

@@ -9,8 +9,10 @@ import { loadConfig, saveConfig, validateConfig, loadCacheMeta, loadCronMeta, sa
 import {
   getDashboardStats,
   getAccounts,
+  getAccountByName,
   deleteAccountFromDB,
   updateAccountDisabledState,
+  upsertAuthAccounts,
   getScanRuns,
   clearScanRuns,
   clearScanRunsOlderThanDays,
@@ -28,9 +30,33 @@ import {
 } from '../core/db';
 import { runScan, runMaintain, runUpload } from '../core/engine';
 import type { UploadFileItem } from '../core/engine';
-import { deleteAccount, setAccountDisabled } from '../core/cpa-client';
+import { deleteAccount, setAccountDisabled, fetchAuthFiles, buildAuthRecord, probeWhamUsage } from '../core/cpa-client';
 
 const api = new Hono<HonoEnv>();
+
+function statusMessageIndicatesQuota(record: Record<string, unknown>): boolean {
+  const raw = String(record.status_message ?? '').trim();
+  if (!raw) return false;
+  if (/usage_limit_reached/i.test(raw)) return true;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const directType = String(parsed.type ?? '').trim();
+    if (directType === 'usage_limit_reached') return true;
+    const errorObj = parsed.error;
+    if (errorObj && typeof errorObj === 'object' && !Array.isArray(errorObj)) {
+      return String((errorObj as Record<string, unknown>).type ?? '').trim() === 'usage_limit_reached';
+    }
+  } catch {
+    // ignore non-json strings
+  }
+  return false;
+}
+
+function statusMessageIndicatesInvalid(record: Record<string, unknown>): boolean {
+  const raw = String(record.status_message ?? '').trim();
+  if (!raw) return false;
+  return /(unauthorized|401|invalid token|token expired|expired|payment_required|not_found|invalidated|authentication token|sign(?:ed)? in again|signing in again|login again|log in again)/i.test(raw);
+}
 
 // ── Auth ─────────────────────────────────────────────────────────────
 
@@ -243,6 +269,182 @@ api.post('/accounts/:name/toggle', async (c) => {
     await logActivity(c.env.DB, 'toggle_account', `${body.disabled ? '禁用' : '启用'}账号: ${name}`, String(user?.username ?? ''));
   }
   return c.json(result);
+});
+
+api.post('/accounts/:name/maintain', async (c) => {
+  const name = decodeURIComponent(c.req.param('name'));
+  const config = await loadConfig(c.env.DB, c.env);
+  if (!config.base_url || !config.token) {
+    return c.json({ ok: false, error: 'CPA 配置不完整' }, 400);
+  }
+
+  const existing = await getAccountByName(c.env.DB, name);
+  if (!existing) {
+    return c.json({ ok: false, error: `本地未找到账号: ${name}` }, 404);
+  }
+
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+  const nowIso = new Date().toISOString();
+
+  try {
+    const files = await fetchAuthFiles(config.base_url, config.token, config.timeout);
+    const remoteItem = files.find((item) => String((item as Record<string, unknown>).name ?? '').trim() === name) as Record<string, unknown> | undefined;
+    if (!remoteItem) {
+      return c.json({ ok: false, error: `远端 CPA 当前未找到该账号: ${name}，建议先执行一次全量扫描` }, 404);
+    }
+
+    const inventoryRecord = buildAuthRecord(remoteItem, existing, nowIso);
+    await upsertAuthAccounts(c.env.DB, [inventoryRecord]);
+
+    const probedRecord = await probeWhamUsage(
+      config.base_url,
+      config.token,
+      inventoryRecord,
+      config.timeout,
+      config.retries,
+      config.user_agent,
+      config.quota_disable_threshold
+    );
+
+    let workingRecord: Record<string, unknown> = { ...probedRecord, updated_at: new Date().toISOString() };
+    let action = 'none';
+    let actionResult: Record<string, unknown> | null = null;
+
+    const invalid = Number(workingRecord.is_invalid_401 ?? 0) === 1 || statusMessageIndicatesInvalid(workingRecord);
+    const quotaLimited = !invalid && (
+      Number(workingRecord.is_quota_limited ?? 0) === 1 || statusMessageIndicatesQuota(workingRecord)
+    );
+    const recovered = Number(workingRecord.is_recovered ?? 0) === 1;
+
+    if (invalid) {
+      if (config.delete_401 && Number(workingRecord.api_status_code ?? 0) === 401) {
+        action = 'delete_invalid';
+        actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
+        if (actionResult.ok) {
+          await deleteAccountFromDB(c.env.DB, name);
+          await logActivity(c.env.DB, 'maintain_single_account', `单账号维护删除401/失效账号: ${name}`, username);
+          return c.json({
+            ok: true,
+            name,
+            action,
+            action_result: actionResult,
+            removed: true,
+            account: null,
+          });
+        }
+        workingRecord.last_action = 'delete_invalid';
+        workingRecord.last_action_status = 'failed';
+        workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
+      } else if (Number(workingRecord.disabled ?? 0) !== 1) {
+        action = 'disable_invalid';
+        actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
+        workingRecord.last_action = 'disable_invalid';
+        workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+        workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
+        if (actionResult.ok) {
+          workingRecord.disabled = 1;
+          workingRecord.managed_reason = 'invalid_disabled';
+          workingRecord.is_recovered = 0;
+        }
+      } else {
+        action = 'mark_invalid_disabled';
+        workingRecord.disabled = 1;
+        workingRecord.managed_reason = 'invalid_disabled';
+        workingRecord.is_recovered = 0;
+        workingRecord.last_action = 'mark_invalid_disabled';
+        workingRecord.last_action_status = 'success';
+        workingRecord.last_action_error = null;
+      }
+    } else if (quotaLimited) {
+      if (config.quota_action === 'delete') {
+        action = 'delete_quota';
+        actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
+        if (actionResult.ok) {
+          await deleteAccountFromDB(c.env.DB, name);
+          await logActivity(c.env.DB, 'maintain_single_account', `单账号维护删除限额账号: ${name}`, username);
+          return c.json({
+            ok: true,
+            name,
+            action,
+            action_result: actionResult,
+            removed: true,
+            account: null,
+          });
+        }
+        workingRecord.last_action = 'delete_quota';
+        workingRecord.last_action_status = 'failed';
+        workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
+      } else if (Number(workingRecord.disabled ?? 0) !== 1) {
+        action = 'disable_quota';
+        actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
+        workingRecord.last_action = 'disable_quota';
+        workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+        workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
+        if (actionResult.ok) {
+          workingRecord.disabled = 1;
+          workingRecord.managed_reason = 'quota_disabled';
+          workingRecord.is_recovered = 0;
+        }
+      } else {
+        action = 'mark_quota_disabled';
+        workingRecord.disabled = 1;
+        workingRecord.managed_reason = 'quota_disabled';
+        workingRecord.is_recovered = 0;
+        workingRecord.last_action = 'mark_quota_disabled';
+        workingRecord.last_action_status = 'success';
+        workingRecord.last_action_error = null;
+      }
+    } else if (
+      recovered &&
+      config.auto_reenable &&
+      Number(workingRecord.disabled ?? 0) === 1 &&
+      (config.reenable_scope === 'signal' || String(workingRecord.managed_reason ?? '') === 'quota_disabled')
+    ) {
+      action = 'reenable';
+      actionResult = await setAccountDisabled(config.base_url, config.token, name, false, config.timeout) as unknown as Record<string, unknown>;
+      workingRecord.last_action = 'reenable_quota';
+      workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+      workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '启用失败');
+      if (actionResult.ok) {
+        workingRecord.disabled = 0;
+        workingRecord.managed_reason = null;
+        workingRecord.is_recovered = 0;
+        workingRecord.is_quota_limited = 0;
+        workingRecord.probe_error_kind = null;
+        workingRecord.probe_error_text = null;
+      }
+    } else {
+      action = 'refresh_only';
+      workingRecord.last_action = 'maintain_single_probe';
+      workingRecord.last_action_status = 'success';
+      workingRecord.last_action_error = null;
+    }
+
+    workingRecord.updated_at = new Date().toISOString();
+    await upsertAuthAccounts(c.env.DB, [workingRecord]);
+
+    const actionSummary = actionResult
+      ? ` | 动作=${action} | 结果=${actionResult.ok ? '成功' : '失败'}${actionResult.error ? ` | 错误=${String(actionResult.error)}` : ''}`
+      : ` | 动作=${action}`;
+    await logActivity(
+      c.env.DB,
+      'maintain_single_account',
+      `单账号维护: ${name} | invalid=${invalid ? 1 : 0} | quota=${quotaLimited ? 1 : 0} | recovered=${recovered ? 1 : 0}${actionSummary}`,
+      username
+    );
+
+    return c.json({
+      ok: true,
+      name,
+      action,
+      action_result: actionResult,
+      removed: false,
+      account: workingRecord,
+    });
+  } catch (error) {
+    return c.json({ ok: false, error: String(error) }, 500);
+  }
 });
 
 // ── Operations (async via waitUntil) ─────────────────────────────────
