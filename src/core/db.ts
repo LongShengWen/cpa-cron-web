@@ -17,7 +17,9 @@ const AUTH_ACCOUNT_COLUMNS = [
   'last_seen_at', 'last_probed_at', 'updated_at',
 ];
 
-const DELETE_CHUNK_SIZE = 200;
+// D1 对单条 SQL 可绑定变量数量更敏感，历史清理使用更保守的分批大小，
+// 避免 `DELETE ... IN (?, ?, ...)` 在数据量较大时触发 `too many SQL variables`。
+const DELETE_CHUNK_SIZE = 50;
 const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
 const HISTORY_RETENTION_DAYS = 1;
 const ACTIVITY_LOG_RETENTION_DAYS = 1;
