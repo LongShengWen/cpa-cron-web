@@ -7,3 +7,20 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Local development config
+docker-compose.yml
+.env
+.env.*
+!.env.example
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
