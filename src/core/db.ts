@@ -56,7 +56,13 @@ async function deleteRowsByIds(
 }
 
 function getCutoffTimestamp(keepDays: number): number {
-  return Date.now() - keepDays * 24 * 60 * 60 * 1000;
+  const dayMillis = 24 * 60 * 60 * 1000;
+  const chinaOffsetMillis = 8 * 60 * 60 * 1000;
+  const nowUtcMillis = Date.now();
+  const chinaNowMillis = nowUtcMillis + chinaOffsetMillis;
+  const chinaTodayStartMillis = Math.floor(chinaNowMillis / dayMillis) * dayMillis;
+  const retainedWindowStartMillis = chinaTodayStartMillis - (keepDays - 1) * dayMillis;
+  return retainedWindowStartMillis - chinaOffsetMillis;
 }
 
 async function purgeHistoricalRetention(db: D1Database): Promise<void> {
