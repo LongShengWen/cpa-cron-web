@@ -50,6 +50,26 @@ function getUsageLimitErrorPayload(body: Record<string, unknown>): Record<string
   return null;
 }
 
+function parseStatusMessageObject(raw: unknown): Record<string, unknown> | null {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // ignore invalid status_message json
+  }
+  return null;
+}
+
+function getUsageLimitPayloadFromStatusMessage(raw: unknown): Record<string, unknown> | null {
+  const parsed = parseStatusMessageObject(raw);
+  if (!parsed) return null;
+  return getUsageLimitErrorPayload(parsed);
+}
+
 function maybeJsonLoads(value: unknown): unknown {
   if (typeof value === 'object' && value !== null) return value;
   if (typeof value !== 'string') return null;
@@ -264,8 +284,28 @@ export function classifyAccountState(
 ): Record<string, unknown> {
   const invalid401 =
     record.api_status_code === 401;
+  const statusMessageQuotaPayload = getUsageLimitPayloadFromStatusMessage(record.status_message);
   const usageLimitError =
-    String(record.usage_error_type ?? '').trim() === 'usage_limit_reached';
+    String(record.usage_error_type ?? '').trim() === 'usage_limit_reached' ||
+    !!statusMessageQuotaPayload;
+
+  if (statusMessageQuotaPayload) {
+    record.usage_error_type = 'usage_limit_reached';
+    record.usage_allowed = 0;
+    record.usage_limit_reached = 1;
+    if (!String(record.usage_plan_type ?? '').trim()) {
+      record.usage_plan_type = (String(statusMessageQuotaPayload.plan_type ?? '').trim()) || null;
+    }
+    if (statusMessageQuotaPayload.resets_at != null) {
+      record.usage_reset_at = Number(statusMessageQuotaPayload.resets_at);
+    }
+    if (statusMessageQuotaPayload.resets_in_seconds != null) {
+      record.usage_reset_after_seconds = Number(statusMessageQuotaPayload.resets_in_seconds);
+    }
+    if (record.usage_remaining_ratio == null || Number(record.usage_remaining_ratio) > 0) {
+      record.usage_remaining_ratio = 0;
+    }
+  }
 
   const { limitReached, allowed, source } = resolveQuotaSignal(record);
   const { ratio: effectiveRatio, source: ratioSource } = resolveQuotaRemainingRatio(record);

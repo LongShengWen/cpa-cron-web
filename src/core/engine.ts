@@ -75,13 +75,12 @@ function isLocalRuntimeDatabase(db: D1Database): boolean {
 }
 
 function resolveProbeLimit(db: D1Database, defaultLimit: number): number {
-  // 仅本地 Docker / Node.js runtime 使用自建 SQLite 适配层时，
-  // 才放开全量探测；Cloudflare Worker 在线上启用了 nodejs_compat，
-  // 同样可能暴露 process.versions.node，因此不能再用 Node 特征判定。
-  // 用户要求在 Docker 下扫描、维护都必须基于远端 CPA 源做全量处理，
-  // 因此这里统一放开探测上限，改为单次任务全量探测。
-  if (isLocalRuntimeDatabase(db)) return Number.MAX_SAFE_INTEGER;
-  return defaultLimit;
+  void db;
+  void defaultLimit;
+  // 去掉“分批轮转探测”后，扫描和维护都改为单次任务内全量探测。
+  // 这里统一放开探测数量上限，避免 Cloudflare / Docker 因 cursor 轮转
+  // 只处理部分账号，导致限额或失效状态需要多轮定时任务才会覆盖到。
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function selectRotatingRecords<T>(
@@ -655,7 +654,7 @@ export async function runMaintain(
       Number(r.is_invalid_401) === 1 || statusMessageIndicatesInvalid(r)
     );
     const quotaRecords = candidateRecords.filter(
-      (r) => Number(r.is_quota_limited) === 1 && Number(r.is_invalid_401) !== 1
+      (r) => (Number(r.is_quota_limited) === 1 || statusMessageIndicatesQuota(r)) && Number(r.is_invalid_401) !== 1
     );
     const recoveredRecords = candidateRecords.filter((r) => Number(r.is_recovered) === 1);
 
