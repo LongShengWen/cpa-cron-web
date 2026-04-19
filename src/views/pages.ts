@@ -368,19 +368,6 @@ function renderQuotaCell(
 
 export function dashboardPage(): string {
   return htmlLayout('仪表盘', `
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Dashboard overview</span>
-    <h3>集中查看账号池健康度、最近扫描结果与定时任务状态</h3>
-    <p>现在的首页更偏向 PWA 小屏使用：信息分组更清晰、卡片间距更接近原生应用、最近扫描与 Cron 结果也更适合在手机上快速浏览。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">space_dashboard</span>首页总览</span>
-    <span class="hero-chip"><span class="material-icons">task_alt</span>扫描结果</span>
-    <span class="hero-chip"><span class="material-icons">schedule</span>Cron 运行状态</span>
-    <span class="hero-chip"><span class="material-icons">receipt_long</span>最近活动</span>
-  </div>
-</div>
 <div id="statsContainer"><div class="spinner" style="margin:40px auto;display:block"></div></div>
 <div class="page-grid page-grid-2 section-stack">
   <div class="table-wrapper">
@@ -434,14 +421,14 @@ export function dashboardPage(): string {
   }
 
   statsContainer.innerHTML = \`
-    <div class="stats-grid">
-      <div class="stat-card"><div class="label">总账号数</div><div class="value">\${data.total_accounts}</div></div>
-      <div class="stat-card"><div class="label">有效账号</div><div class="value success">\${data.active_accounts}</div></div>
-      <div class="stat-card"><div class="label">已禁用</div><div class="value warning">\${data.disabled_accounts}</div></div>
-      <div class="stat-card"><div class="label">401 失效</div><div class="value danger">\${data.invalid_401}</div></div>
-      <div class="stat-card"><div class="label">配额耗尽</div><div class="value danger">\${data.quota_limited}</div></div>
-      <div class="stat-card"><div class="label">已恢复</div><div class="value info">\${data.recovered}</div></div>
-      <div class="stat-card"><div class="label">探测异常</div><div class="value warning">\${data.probe_errors}</div></div>
+    <div class="stats-grid compact-stats-grid">
+      <div class="stat-card compact-stat-card"><div class="label">总账号数</div><div class="value">\${data.total_accounts}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">有效账号</div><div class="value success">\${data.active_accounts}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">已禁用</div><div class="value warning">\${data.disabled_accounts}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">401 失效</div><div class="value danger">\${data.invalid_401}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">配额耗尽</div><div class="value danger">\${data.quota_limited}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">已恢复</div><div class="value info">\${data.recovered}</div></div>
+      <div class="stat-card compact-stat-card"><div class="label">探测异常</div><div class="value warning">\${data.probe_errors}</div></div>
     </div>
   \`;
   if (data.last_scan) {
@@ -585,19 +572,6 @@ export function accountsPage(initialData?: AccountsInitialData): string {
     : '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">暂无数据</td></tr>';
   return htmlLayout('账号管理', `
 <div id="accountsAlert" style="display:none" class="alert alert-info" style="margin-bottom:16px"></div>
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Accounts workspace</span>
-    <h3>在手机端也能顺手完成筛选、维护、批量启停与问题定位</h3>
-    <p>账号页已经进一步调整为更接近原生 App 的“状态卡 + 快捷动作 + 筛选面板”结构，小屏下不再像桌面表格直接缩进手机里。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">filter_list</span>快速筛选</span>
-    <span class="hero-chip"><span class="material-icons">checklist</span>批量操作</span>
-    <span class="hero-chip"><span class="material-icons">health_and_safety</span>状态监控</span>
-    <span class="hero-chip"><span class="material-icons">bolt</span>快捷维护</span>
-  </div>
-</div>
 <div class="table-wrapper accounts-meta-panel" style="margin-bottom:16px">
   <div class="accounts-meta-grid">
     <div>
@@ -606,27 +580,25 @@ export function accountsPage(initialData?: AccountsInitialData): string {
         <div class="status-mini-card">
           <span class="status-mini-label">数据来源时间</span>
           <span class="status-mini-value" id="accountsFreshness">加载中...</span>
-          <span class="status-mini-note">当前列表显示的数据刷新时间</span>
         </div>
         <div class="status-mini-card">
           <span class="status-mini-label">最近探测</span>
           <span class="status-mini-value" id="accountsProbeTime">-</span>
-          <span class="status-mini-note">最近一次账号探测结果写入时间</span>
         </div>
         <div class="status-mini-card">
           <span class="status-mini-label">当前任务</span>
           <span class="status-mini-value" id="accountsTaskState">空闲</span>
-          <span class="status-mini-note">扫描 / 维护任务运行状态</span>
         </div>
       </div>
     </div>
     <div class="quick-actions-panel">
       <div class="quick-actions-title"><span class="material-icons">flash_on</span><span>快捷操作</span></div>
-      <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
-      <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 立即维护</button>
-      <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
-      <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止当前任务</button>
-      <div class="surface-note">建议在批量维护前先按状态筛选，避免在手机端误操作过多账号。</div>
+      <div class="quick-actions-grid">
+        <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
+        <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 立即维护</button>
+        <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
+        <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止当前任务</button>
+      </div>
     </div>
   </div>
 </div>
@@ -634,9 +606,7 @@ export function accountsPage(initialData?: AccountsInitialData): string {
   <div class="table-toolbar accounts-toolbar-panel">
     <div class="accounts-toolbar-head">
       <div class="accounts-toolbar-copy">
-        <span class="toolbar-section-tag">筛选与批量处理</span>
-        <div class="accounts-toolbar-title">账号列表视图</div>
-        <div class="accounts-toolbar-subtitle">支持按状态、排序和关键字快速过滤，批量操作按钮会根据你已选择的账号自动启用。</div>
+        <div class="accounts-toolbar-title">账号列表</div>
       </div>
       <span id="totalCount" class="accounts-counter-pill">共 ${initialTotal} 条</span>
     </div>
@@ -678,7 +648,6 @@ export function accountsPage(initialData?: AccountsInitialData): string {
       <button class="btn btn-danger btn-sm" onclick="batchDelete()" id="batchDeleteBtn" disabled>
         <span class="material-icons" style="font-size:16px">delete</span> 批量删除
       </button>
-      <span class="section-note">列表已针对手机端卡片化显示，继续保留桌面端排序表头与批量勾选逻辑。</span>
     </div>
   </div>
   <div id="accountsTable">
@@ -1565,25 +1534,13 @@ refreshAccountMeta();
 
 export function operationsPage(): string {
   return htmlLayout('运维操作', `
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Operations center</span>
-    <h3>把高频操作收成移动端也顺手的运维中心</h3>
-    <p>扫描、维护、上传三类动作继续保留，但整体已经更像 App 内的操作中心：卡片更独立，结果区与进度条也更适合在小屏上查看。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">search</span>同步账号</span>
-    <span class="hero-chip"><span class="material-icons">build</span>维护动作</span>
-    <span class="hero-chip"><span class="material-icons">cloud_upload</span>文件上传</span>
-  </div>
-</div>
 <div class="stats-grid ops-grid">
   <div class="stat-card" id="card-scan" style="cursor:pointer" onclick="runOperation('scan')">
-    <div style="display:flex;align-items:center;gap:12px">
-      <span class="material-icons" id="icon-scan" style="font-size:36px;color:var(--info)">search</span>
-      <div style="flex:1">
+    <div class="ops-action-row">
+      <span class="material-icons ops-action-icon" id="icon-scan" style="color:var(--info)">search</span>
+      <div class="ops-action-copy">
         <div class="label" id="label-scan">同步最新账号</div>
-        <div style="font-size:13px;margin-top:4px;color:var(--text-dim)" id="desc-scan">从当前站点拉取最新账号并更新状态</div>
+        <div class="ops-action-desc" id="desc-scan">从当前站点拉取最新账号并更新状态</div>
         <div id="progress-scan" style="display:none;margin-top:8px">
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:6px">
             <div id="bar-scan" class="progress-bar-animated" style="width:0%;height:100%;background:linear-gradient(90deg,var(--info),var(--primary));transition:width .3s;border-radius:4px"></div>
@@ -1594,11 +1551,11 @@ export function operationsPage(): string {
     </div>
   </div>
   <div class="stat-card" id="card-maintain" style="cursor:pointer" onclick="runOperation('maintain')">
-    <div style="display:flex;align-items:center;gap:12px">
-      <span class="material-icons" id="icon-maintain" style="font-size:36px;color:var(--warning)">build</span>
-      <div style="flex:1">
+    <div class="ops-action-row">
+      <span class="material-icons ops-action-icon" id="icon-maintain" style="color:var(--warning)">build</span>
+      <div class="ops-action-copy">
         <div class="label" id="label-maintain">扫描并维护账号</div>
-        <div style="font-size:13px;margin-top:4px;color:var(--text-dim)" id="desc-maintain">禁用限额、禁用或删除 401 / 失效账号，并自动恢复已恢复账号</div>
+        <div class="ops-action-desc" id="desc-maintain">禁用限额、禁用或删除 401 / 失效账号，并自动恢复已恢复账号</div>
         <div id="progress-maintain" style="display:none;margin-top:8px">
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;overflow:hidden;height:6px">
             <div id="bar-maintain" class="progress-bar-animated" style="width:0%;height:100%;background:linear-gradient(90deg,var(--warning),var(--danger));transition:width .3s;border-radius:4px"></div>
@@ -1609,11 +1566,11 @@ export function operationsPage(): string {
     </div>
   </div>
   <div class="stat-card" style="cursor:pointer" onclick="document.getElementById('uploadSection').style.display='block'">
-    <div style="display:flex;align-items:center;gap:12px">
-      <span class="material-icons" style="font-size:36px;color:var(--success)">cloud_upload</span>
-      <div>
+    <div class="ops-action-row">
+      <span class="material-icons ops-action-icon" style="color:var(--success)">cloud_upload</span>
+      <div class="ops-action-copy">
         <div class="label">上传账号文件</div>
-        <div style="font-size:13px;margin-top:4px;color:var(--text-dim)">把你手里的 json 账号直接上传到当前站点</div>
+        <div class="ops-action-desc">把你手里的 json 账号直接上传到当前站点</div>
       </div>
     </div>
   </div>
@@ -1622,7 +1579,7 @@ export function operationsPage(): string {
 <div id="uploadSection" style="display:none;margin-bottom:24px" class="table-wrapper">
   <div class="table-toolbar"><strong>上传账号文件</strong></div>
   <div class="operations-section-body">
-    <div class="surface-note" style="margin-bottom:12px">这里上传的是你已经准备好的账号 json 文件，上传成功后会直接进入当前 CPA 站点账号池。PWA 小屏下按钮会自动堆叠，避免误触。</div>
+    <div class="surface-note" style="margin-bottom:12px">这里上传的是你已经准备好的账号 json 文件，上传成功后会直接进入当前 CPA 站点账号池。</div>
     <input type="file" id="uploadFiles" multiple accept=".json" style="margin-bottom:12px">
     <div class="inline-form">
       <button class="btn btn-primary" onclick="doUpload()"><span class="material-icons" style="font-size:16px">cloud_upload</span> 开始上传</button>
@@ -1937,18 +1894,6 @@ function showResult(html) {
 
 export function historyPage(): string {
   return htmlLayout('扫描历史', `
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Scan history</span>
-    <h3>把扫描记录、清理入口和翻页操作整理成更适合手机的历史页</h3>
-    <p>顶部保留天数、清理按钮和记录表现在按操作区域重新分组，小屏下会自动纵向排布，不再出现一行塞满多个按钮的情况。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">history</span>扫描记录</span>
-    <span class="hero-chip"><span class="material-icons">delete_sweep</span>历史清理</span>
-    <span class="hero-chip"><span class="material-icons">insights</span>结果回看</span>
-  </div>
-</div>
 <div class="table-wrapper responsive-table">
   <div class="table-toolbar">
     <div class="toolbar-group toolbar-group-grow" style="align-items:flex-start">
@@ -2057,18 +2002,6 @@ load();
 
 export function activityPage(): string {
   return htmlLayout('操作日志', `
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Activity log</span>
-    <h3>操作日志页继续收紧为移动端可读、可清理、可回溯的活动视图</h3>
-    <p>日志详情、用户和时间仍然完整保留，但工具栏已经按“保留策略 + 清理动作”分组，手机端查看和清理都会更自然。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">receipt_long</span>活动记录</span>
-    <span class="hero-chip"><span class="material-icons">schedule</span>保留天数</span>
-    <span class="hero-chip"><span class="material-icons">delete_sweep</span>快速清理</span>
-  </div>
-</div>
 <div class="table-wrapper responsive-table">
   <div class="table-toolbar">
     <div class="toolbar-group toolbar-group-grow" style="align-items:flex-start">
@@ -2163,19 +2096,6 @@ load();
 
 export function settingsPage(): string {
   return htmlLayout('系统配置', `
-<div class="app-page-hero">
-  <div class="app-page-hero-main">
-    <span class="hero-kicker">Settings center</span>
-    <h3>把配置页改成更像手机端“设置中心”的分组面板</h3>
-    <p>现在配置项按连接、任务参数、上传参数和安全项分成独立面板，小屏下可折叠浏览；你不需要再在一整屏桌面表单里来回找字段。</p>
-  </div>
-  <div class="hero-chip-list">
-    <span class="hero-chip"><span class="material-icons">settings</span>系统配置</span>
-    <span class="hero-chip"><span class="material-icons">tune</span>执行参数</span>
-    <span class="hero-chip"><span class="material-icons">security</span>安全项</span>
-    <span class="hero-chip"><span class="material-icons">cloud_sync</span>连接测试</span>
-  </div>
-</div>
 <div class="table-wrapper" style="margin-bottom:16px">
   <div class="table-toolbar"><strong>已保存配置概览</strong></div>
   <div class="page-grid saved-config-grid">
@@ -2192,7 +2112,7 @@ export function settingsPage(): string {
       <span class="settings-panel-main">
         <span class="settings-panel-kicker">连接配置</span>
         <span class="settings-panel-title">CPA 连接配置</span>
-        <span class="settings-panel-subtitle">集中管理 Base URL、Token、Provider 和连接测试，方便在 PWA 小屏中单独修改。</span>
+        <span class="settings-panel-subtitle">集中管理 Base URL、Token、Provider 和连接测试。</span>
       </span>
       <span class="material-icons settings-panel-chevron">expand_more</span>
     </summary>
@@ -2227,7 +2147,7 @@ export function settingsPage(): string {
       <span class="settings-panel-main">
         <span class="settings-panel-kicker">任务参数</span>
         <span class="settings-panel-title">探测 & 维护参数</span>
-        <span class="settings-panel-subtitle">配置定时任务、并发、安全阈值和恢复策略，面板会自动适配手机端折叠阅读。</span>
+        <span class="settings-panel-subtitle">配置定时任务、并发、安全阈值和恢复策略。</span>
       </span>
       <span class="material-icons settings-panel-chevron">expand_more</span>
     </summary>
@@ -2289,7 +2209,7 @@ export function settingsPage(): string {
       <span class="settings-panel-main">
         <span class="settings-panel-kicker">上传策略</span>
         <span class="settings-panel-title">上传参数</span>
-        <span class="settings-panel-subtitle">上传并发、重试和补充策略单独放到一个面板，手机端更适合分区查看。</span>
+        <span class="settings-panel-subtitle">上传并发、重试和补充策略。</span>
       </span>
       <span class="material-icons settings-panel-chevron">expand_more</span>
     </summary>
@@ -2315,7 +2235,7 @@ export function settingsPage(): string {
       <span class="settings-panel-main">
         <span class="settings-panel-kicker">安全项</span>
         <span class="settings-panel-title">修改密码</span>
-        <span class="settings-panel-subtitle">把账号安全相关项独立出来，减少和业务参数混在一起时的阅读负担。</span>
+        <span class="settings-panel-subtitle">账号安全设置。</span>
       </span>
       <span class="material-icons settings-panel-chevron">expand_more</span>
     </summary>

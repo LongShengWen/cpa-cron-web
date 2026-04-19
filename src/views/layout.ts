@@ -26,18 +26,8 @@ function renderDesktopNav(activeNav: string): string {
     .join('\n');
 }
 
-function renderMobileNav(activeNav: string): string {
-  return NAV_ITEMS
-    .map(
-      (item) =>
-        `<a href="${item.href}" class="mobile-nav-item ${activeNav === item.id ? 'active' : ''}"><span class="material-icons">${item.icon}</span><span>${item.label}</span></a>`
-    )
-    .join('\n');
-}
-
 export function htmlLayout(title: string, content: string, activeNav = ''): string {
   const navHtml = renderDesktopNav(activeNav);
-  const mobileNavHtml = renderMobileNav(activeNav);
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -65,7 +55,6 @@ ${APP_ICON_LINK_TAGS}
   --radius: 8px;
   --sidebar-width: 240px;
   --topbar-height: 68px;
-  --mobile-nav-height: 92px;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { background: var(--bg); }
@@ -151,6 +140,10 @@ body.pwa-standalone .main {
   width: 100%;
 }
 body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
+body.pwa-standalone .topbar-kicker,
+body.pwa-standalone .topbar-subtitle { display: none; }
+body.pwa-standalone .topbar-title-group { gap: 0; }
+body.pwa-standalone .sidebar-header p { display: none; }
 /* Main */
 .main {
   margin-left: var(--sidebar-width);
@@ -194,50 +187,6 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
 .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
 .inline-form > * { min-width: 0; }
 .section-note { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
-.app-page-hero {
-  display: grid;
-  gap: 16px;
-  margin-bottom: 20px;
-  padding: 22px 24px;
-  border-radius: 22px;
-  border: 1px solid rgba(108,92,231,.18);
-  background:
-    radial-gradient(circle at top right, rgba(116,185,255,.18), transparent 34%),
-    radial-gradient(circle at bottom left, rgba(108,92,231,.16), transparent 38%),
-    linear-gradient(180deg, rgba(28,31,43,.98), rgba(20,22,32,.96));
-  box-shadow: 0 18px 44px rgba(0,0,0,.18);
-}
-.app-page-hero-main { display: grid; gap: 8px; }
-.hero-kicker {
-  font-size: 11px;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: rgba(228,230,235,.72);
-}
-.app-page-hero-main h3 {
-  font-size: 24px;
-  line-height: 1.2;
-}
-.app-page-hero-main p {
-  max-width: 760px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-dim);
-}
-.hero-chip-list { display: flex; gap: 10px; flex-wrap: wrap; }
-.hero-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(15,17,23,.52);
-  border: 1px solid rgba(255,255,255,.08);
-  font-size: 12px;
-  color: var(--text);
-}
-.hero-chip .material-icons { font-size: 16px; color: var(--primary); }
 .surface-note {
   padding: 12px 14px;
   border-radius: 14px;
@@ -365,30 +314,38 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
   color: var(--text);
   line-height: 1.5;
 }
-.status-mini-note {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
-  line-height: 1.5;
-}
 .quick-actions-panel {
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 18px;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
   border: 1px solid rgba(108,92,231,.12);
   background: rgba(255,255,255,.025);
 }
 .quick-actions-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text-dim);
 }
-.quick-actions-title .material-icons { font-size: 18px; color: var(--primary); }
-.quick-actions-panel .btn { width: 100%; justify-content: center; }
+.quick-actions-title .material-icons { font-size: 16px; color: var(--primary); }
+.quick-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.quick-actions-grid .btn {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  justify-content: center;
+}
+.quick-actions-grid #quickScanMaintainBtn,
+.quick-actions-grid #quickTaskCancelBtn {
+  grid-column: 1 / -1;
+}
 .accounts-toolbar-panel { display: grid; gap: 14px; }
 .accounts-toolbar-head {
   display: flex;
@@ -405,7 +362,6 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
   color: var(--text-dim);
 }
 .accounts-toolbar-title { font-size: 16px; font-weight: 600; color: var(--text); }
-.accounts-toolbar-subtitle { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
 .accounts-counter-pill {
   display: inline-flex;
   align-items: center;
@@ -437,6 +393,10 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
 .activity-section-body {
   padding: 18px 20px;
 }
+.ops-action-row { display:flex; align-items:center; gap:12px; }
+.ops-action-icon { font-size:36px; flex-shrink:0; }
+.ops-action-copy { flex:1; min-width:0; }
+.ops-action-desc { font-size:13px; margin-top:4px; color:var(--text-dim); line-height:1.55; }
 .responsive-table table { min-width: 100%; }
 .accounts-table .account-row td { position: relative; }
 .accounts-table .account-cell-email { font-weight: 600; }
@@ -458,48 +418,10 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
 .account-card-details { display: none; }
 .accounts-table .account-cell-actions .action-group { width: 100%; }
 .accounts-table .account-cell-actions .btn { min-height: 34px; }
-.mobile-menu-btn, .pwa-install-btn { display: none; }
-.mobile-bottom-nav {
-  display: none;
-  position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-  z-index: 110;
-  padding: 8px;
-  background: rgba(20,22,32,.94);
-  border: 1px solid rgba(108,92,231,.18);
-  border-radius: 22px;
-  backdrop-filter: blur(14px);
-  box-shadow: 0 18px 36px rgba(0,0,0,.24);
-  gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.mobile-bottom-nav::-webkit-scrollbar { display: none; }
-.mobile-nav-item {
-  min-width: 74px;
-  flex: 1 0 auto;
-  color: var(--text-dim);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  transition: all .15s;
-  font-size: 11px;
-}
-.mobile-nav-item .material-icons { font-size: 20px; }
-.mobile-nav-item.active {
-  color: #fff;
-  background: linear-gradient(180deg, rgba(108,92,231,.22), rgba(108,92,231,.12));
-}
-.mobile-nav-item:hover { color: var(--text); background: rgba(108,92,231,.1); }
+.mobile-menu-btn { display: none; }
 /* Cards */
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.compact-stats-grid { grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; margin-bottom: 12px; }
 .stat-card {
   background: linear-gradient(180deg, rgba(26,29,39,.98), rgba(23,25,35,.96));
   border: 1px solid rgba(42,46,61,.94);
@@ -515,6 +437,20 @@ body.pwa-standalone .mobile-menu-btn { display: inline-flex; }
 .stat-card .value.danger { color: var(--danger); }
 .stat-card .value.warning { color: var(--warning); }
 .stat-card .value.info { color: var(--info); }
+.compact-stat-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.10);
+}
+.compact-stat-card .label {
+  font-size: 10px;
+  letter-spacing: .25px;
+}
+.compact-stat-card .value {
+  margin-top: 4px;
+  font-size: 18px;
+  line-height: 1.2;
+}
 /* Table */
 .table-wrapper {
   background: linear-gradient(180deg, rgba(26,29,39,.98), rgba(26,29,39,.95));
@@ -657,43 +593,35 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
     margin-left: 0;
     width: 100%;
     min-height: 100dvh;
-    padding-bottom: calc(var(--mobile-nav-height) + 18px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   }
   .topbar {
-    min-height: 64px;
-    padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: flex-start;
+    min-height: 56px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    align-items: center;
   }
-  .topbar h2 { font-size: 18px; }
-  .topbar-subtitle { font-size: 11px; white-space: normal; }
-  .topbar-left, .topbar-right { width: 100%; }
-  .topbar-right { gap: 8px; margin-left: 0; justify-content: flex-start; }
-  .topbar-actions { width: 100%; justify-content: flex-start; }
-  .content { padding: 16px; }
-  .app-page-hero { padding: 18px 16px; border-radius: 18px; gap: 14px; }
-  .app-page-hero-main h3 { font-size: 20px; }
-  .hero-chip-list { width: 100%; }
+  .topbar-kicker,
+  .topbar-subtitle { display: none; }
+  .topbar-title-group { gap: 0; }
+  .topbar h2 { font-size: 17px; line-height: 1.3; }
+  .topbar-left { width: auto; }
+  .topbar-right { width: auto; gap: 8px; margin-left: auto; justify-content: flex-end; }
+  .topbar-actions { justify-content: flex-end; }
+  .content { padding: 14px 14px 20px; }
+  .page-grid { gap: 14px; }
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mobile-menu-btn, .pwa-install-btn, .mobile-bottom-nav { display: flex; }
-  .mobile-bottom-nav {
-    align-items: stretch;
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 6px;
-    overflow-x: visible;
-    padding: 8px;
-  }
-  .mobile-nav-item {
-    min-width: 0;
-    padding: 8px 4px;
-    font-size: 10px;
-    line-height: 1.2;
-    border-radius: 10px;
-  }
-  .mobile-nav-item .material-icons { font-size: 18px; }
-  .table-toolbar { padding: 12px; }
+  .compact-stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+  .compact-stat-card { padding: 8px 10px; }
+  .compact-stat-card .label { font-size: 10px; }
+  .compact-stat-card .value { font-size: 16px; }
+  .mobile-menu-btn { display: flex; }
+  .sidebar-header { padding: 16px; }
+  .sidebar-header p { display: none; }
+  .sidebar-nav { padding: 8px 0; }
+  .nav-item { padding: 11px 16px; }
+  .table-toolbar { padding: 12px 14px; gap: 10px; display: grid; }
   th, td { white-space: nowrap; }
   .table-toolbar > input,
   .table-toolbar > select,
@@ -719,25 +647,49 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   .toast-container { right: 12px; left: 12px; top: calc(12px + env(safe-area-inset-top, 0px)); }
   .toast { max-width: none; }
   .page-grid-2, .page-grid-3 { grid-template-columns: 1fr; }
+  .section-note { font-size: 11px; line-height: 1.5; }
+  .surface-note { padding: 10px 12px; font-size: 11px; line-height: 1.55; }
   .meta-list { gap: 10px; align-items: stretch; }
   .meta-list > * { width: 100%; }
   .meta-list .btn { width: 100%; justify-content: center; }
-  .ops-grid,
-  .saved-config-grid { grid-template-columns: 1fr !important; }
-  .accounts-meta-grid { grid-template-columns: 1fr; padding: 14px; }
-  .accounts-status-grid { grid-template-columns: 1fr; }
-  .quick-actions-panel { padding: 0; border: none; background: transparent; }
+  .ops-grid { grid-template-columns: 1fr !important; gap: 12px; }
+  .saved-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; padding: 12px; gap: 10px; }
+  .saved-config-item { padding: 12px 14px; border-radius: 14px; }
+  .saved-config-value { margin-top: 6px; line-height: 1.5; }
+  .accounts-meta-grid { grid-template-columns: 1fr; padding: 12px; gap: 12px; }
+  .accounts-status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .status-mini-card { min-height: 0; padding: 10px; border-radius: 12px; }
+  .status-mini-label { font-size: 10px; letter-spacing: .05em; }
+  .status-mini-value { margin-top: 6px; font-size: 13px; line-height: 1.35; }
+  .quick-actions-panel { padding: 10px; border-radius: 14px; }
+  .quick-actions-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .quick-actions-grid .btn { min-height: 38px; }
+  .accounts-counter-pill { min-height: 30px; padding: 4px 10px; font-size: 11px; }
   .accounts-toolbar-head { flex-direction: column; align-items: flex-start; }
   .accounts-filter-grid { grid-template-columns: 1fr; }
-  .accounts-batch-grid { width: 100%; }
-  .accounts-batch-grid > * { flex: 1 1 100%; }
+  .accounts-batch-grid { width: 100%; display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .accounts-batch-grid > * { min-width: 0; }
+  .accounts-batch-grid > .accounts-counter-pill { grid-column: 1 / -1; justify-content: center; }
   .result-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .settings-panel-summary { padding: 16px; }
-  .settings-panel-body { padding: 0 16px 16px; }
+  .dashboard-section-body,
+  .operations-section-body,
+  .history-section-body,
+  .activity-section-body { padding: 14px; }
+  .ops-grid .stat-card { padding: 14px; }
+  .ops-action-row { gap: 10px; align-items: flex-start; }
+  .ops-action-icon { font-size: 28px !important; }
+  .ops-action-desc { font-size: 12px !important; margin-top: 3px !important; }
+  .settings-panel { border-radius: 14px; }
+  .settings-panel-summary { padding: 14px; gap: 10px; align-items: flex-start; }
+  .settings-panel-icon { width: 36px; height: 36px; border-radius: 12px; }
+  .settings-panel-kicker,
+  .settings-panel-subtitle { display: none; }
+  .settings-panel-title { font-size: 15px; line-height: 1.35; }
+  .settings-panel-body { padding: 0 14px 14px; }
   .settings-actions > * { flex: 1 1 100%; }
   input, select, textarea { min-height: 40px; font-size: 16px; }
   .btn { min-height: 40px; }
-  .section-stack { gap: 16px; margin-top: 16px; }
+  .section-stack { gap: 12px; margin-top: 12px; }
   .table-wrapper, .stat-card { border-radius: 16px; }
   .modal-overlay { align-items: flex-end; }
   .modal {
@@ -759,14 +711,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   .responsive-table { background: transparent; border: none; overflow: visible; }
   .responsive-table > table { min-width: 0; }
   .responsive-table thead { display: none; }
-  .responsive-table tbody { display: grid; gap: 12px; padding: 12px; }
+  .responsive-table tbody { display: grid; gap: 10px; padding: 10px; }
   .responsive-table tr { display: block; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); overflow: hidden; }
   .responsive-table td {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
-    padding: 12px;
+    padding: 10px 12px;
     border-bottom: 1px solid rgba(42,46,61,.72);
     white-space: normal !important;
   }
@@ -786,7 +738,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   .responsive-table td[colspan]::before { display: none; }
   .responsive-table .action-group { width: 100%; }
   .responsive-table .action-group .btn { flex: 1 1 calc(50% - 4px); }
-  .accounts-table tbody { padding: 12px; }
+  .accounts-table tbody { padding: 10px; }
   .accounts-table tr.account-row.account-state-success { border-color: rgba(0,184,148,.26); background: linear-gradient(180deg, rgba(0,184,148,.06), rgba(26,29,39,.96)); }
   .accounts-table tr.account-row.account-state-info { border-color: rgba(116,185,255,.26); background: linear-gradient(180deg, rgba(116,185,255,.06), rgba(26,29,39,.96)); }
   .accounts-table tr.account-row.account-state-warning { border-color: rgba(253,203,110,.26); background: linear-gradient(180deg, rgba(253,203,110,.06), rgba(26,29,39,.96)); }
@@ -897,10 +849,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 }
 
 @media (max-width: 520px) {
+  .content { padding: 12px 12px 18px; }
   .stats-grid { grid-template-columns: 1fr; }
+  .compact-stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .form-row { grid-template-columns: 1fr; }
   .responsive-table .action-group .btn { flex-basis: 100%; }
   .result-stats-grid { grid-template-columns: 1fr; }
+  .saved-config-grid,
+  .accounts-status-grid,
+  .accounts-batch-grid { grid-template-columns: 1fr !important; }
+  .accounts-batch-grid > .accounts-counter-pill { grid-column: auto; }
+  .quick-actions-grid { grid-template-columns: 1fr; }
+  .quick-actions-grid #quickScanMaintainBtn,
+  .quick-actions-grid #quickTaskCancelBtn { grid-column: auto; }
+  .topbar { padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px; }
+  .topbar h2 { font-size: 16px; }
+  .settings-panel-summary { padding: 12px; }
+  .settings-panel-body { padding: 0 12px 12px; }
   .accounts-table tr.account-row {
     grid-template-columns: 32px minmax(0, 1fr);
     grid-template-areas:
@@ -917,15 +882,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   .topbar-actions { width: 100%; justify-content: stretch; }
   .topbar-actions > * { flex: 1 1 auto; }
   .topbar-right { width: 100%; }
-  .mobile-bottom-nav {
-    gap: 4px;
-    left: 8px;
-    right: 8px;
-  }
-  .mobile-nav-item {
-    padding: 7px 2px;
-    font-size: 9px;
-  }
 }
 </style>
 </head>
@@ -933,7 +889,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 <aside class="sidebar" id="appSidebar">
   <div class="sidebar-header">
     <h1>cpa-cron-web</h1>
-    <p>PWA 管理控制台</p>
   </div>
   <nav class="sidebar-nav">
     ${navHtml}
@@ -958,14 +913,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
       <div class="topbar-title-group">
         <span class="topbar-kicker">cpa-cron-web</span>
         <h2>${title}</h2>
-        <span class="topbar-subtitle">PWA 小屏控制台 · 面向手持端的原生化操作体验</span>
       </div>
   </div>
   <div class="topbar-right">
-      <button type="button" class="btn btn-outline btn-sm pwa-install-btn" id="pwaInstallBtn">
-        <span class="material-icons" style="font-size:16px">download</span>
-        <span>安装应用</span>
-      </button>
       <div id="topbarActions" class="topbar-actions"></div>
     </div>
   </div>
@@ -1005,9 +955,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
     ${content}
   </div>
 </div>
-<nav class="mobile-bottom-nav">
-  ${mobileNavHtml}
-</nav>
 <script>
 (function() {
   const container = document.createElement('div');
@@ -1134,17 +1081,11 @@ function toggleMobileSidebar(force) {
 }
 window.toggleMobileSidebar = toggleMobileSidebar;
 
-let deferredInstallPrompt = null;
-
 function syncPwaState() {
   const standalone = isStandaloneMode();
   document.body.classList.toggle('pwa-standalone', standalone);
   if (!standalone && window.innerWidth > 768) {
     toggleMobileSidebar(false);
-  }
-  const installBtn = document.getElementById('pwaInstallBtn');
-  if (installBtn) {
-    installBtn.style.display = !standalone && deferredInstallPrompt ? 'inline-flex' : 'none';
   }
 }
 
@@ -1186,37 +1127,10 @@ async function logout() {
 }
 window.logout = logout;
 
-window.addEventListener('beforeinstallprompt', function(event) {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-  syncPwaState();
-});
-
-window.addEventListener('appinstalled', function() {
-  deferredInstallPrompt = null;
-  syncPwaState();
-  if (window.showToast) window.showToast('已安装为应用，可从桌面直接打开', 'success', 3600);
-});
-
 window.addEventListener('DOMContentLoaded', async function() {
   syncPwaState();
 
-  const installBtn = document.getElementById('pwaInstallBtn');
-  if (installBtn) {
-    installBtn.addEventListener('click', async function() {
-      if (!deferredInstallPrompt) return;
-      deferredInstallPrompt.prompt();
-      try {
-        await deferredInstallPrompt.userChoice;
-      } catch (error) {
-        console.warn('PWA install prompt failed:', error);
-      }
-      deferredInstallPrompt = null;
-      syncPwaState();
-    });
-  }
-
-  document.querySelectorAll('.nav-item, .mobile-nav-item').forEach(function(item) {
+  document.querySelectorAll('.nav-item').forEach(function(item) {
     item.addEventListener('click', function() {
       toggleMobileSidebar(false);
     });
@@ -1313,7 +1227,7 @@ body {
   transition: border-color .15s;
 }
 .form-group input:focus { border-color: var(--primary); }
-.btn-login, .btn-install {
+.btn-login {
   width: 100%;
   padding: 12px;
   border-radius: var(--radius);
@@ -1325,14 +1239,6 @@ body {
 .btn-login { background: var(--primary); color: #fff; border: none; }
 .btn-login:hover { background: var(--primary-hover); }
 .btn-login:disabled { opacity: .5; cursor: not-allowed; }
-.btn-install {
-  display: none;
-  margin-top: 12px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-.btn-install:hover { border-color: var(--primary); color: var(--primary); }
 .error-msg {
   background: rgba(231,76,60,.1);
   border: 1px solid rgba(231,76,60,.3);
@@ -1362,7 +1268,7 @@ body {
   .login-card h1 { font-size: 26px; }
   .login-card p { margin-bottom: 24px; font-size: 13px; }
   .form-group input { min-height: 46px; font-size: 16px; }
-  .btn-login, .btn-install { min-height: 46px; }
+  .btn-login { min-height: 46px; }
   .footer { margin-top: auto; padding-top: 24px; }
 }
 </style>
@@ -1370,7 +1276,7 @@ body {
 <body>
 <div class="login-card">
   <h1>cpa-cron-web</h1>
-  <p>支持移动端 PWA 安装的 CPA 管理控制台</p>
+  <p>CPA 管理控制台</p>
   <div class="error-msg" id="errorMsg"></div>
   <form id="loginForm">
     <div class="form-group">
@@ -1382,34 +1288,10 @@ body {
       <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password" required>
     </div>
     <button type="submit" class="btn-login" id="loginBtn">登 录</button>
-    <button type="button" class="btn-install" id="loginInstallBtn">安装到手机桌面</button>
   </form>
   <div class="footer">首次部署请通过环境变量设置管理员账号后再登录</div>
 </div>
 <script>
-let deferredInstallPrompt = null;
-
-function isStandaloneMode() {
-  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
-}
-
-function syncInstallButton() {
-  const installBtn = document.getElementById('loginInstallBtn');
-  if (!installBtn) return;
-  installBtn.style.display = !isStandaloneMode() && deferredInstallPrompt ? 'block' : 'none';
-}
-
-window.addEventListener('beforeinstallprompt', function(event) {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-  syncInstallButton();
-});
-
-window.addEventListener('appinstalled', function() {
-  deferredInstallPrompt = null;
-  syncInstallButton();
-});
-
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
     navigator.serviceWorker.register('${PWA_METADATA.serviceWorkerHref}').catch(function(error) {
@@ -1417,23 +1299,6 @@ if ('serviceWorker' in navigator) {
     });
   }, { once: true });
 }
-
-const installBtn = document.getElementById('loginInstallBtn');
-if (installBtn) {
-  installBtn.addEventListener('click', async function() {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    try {
-      await deferredInstallPrompt.userChoice;
-    } catch (error) {
-      console.warn('PWA install prompt failed:', error);
-    }
-    deferredInstallPrompt = null;
-    syncInstallButton();
-  });
-}
-
-syncInstallButton();
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
