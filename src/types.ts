@@ -68,10 +68,21 @@ export interface AuthAccount {
   usage_limit_reached: number | null;
   usage_plan_type: string | null;
   usage_email: string | null;
+  usage_remaining_ratio: number | null;
+  usage_total: number | null;
+  usage_used: number | null;
+  usage_remaining: number | null;
+  usage_limit_window_seconds: number | null;
   usage_reset_at: number | null;
   usage_reset_after_seconds: number | null;
+  usage_spark_source: string | null;
   usage_spark_allowed: number | null;
   usage_spark_limit_reached: number | null;
+  usage_spark_remaining_ratio: number | null;
+  usage_spark_total: number | null;
+  usage_spark_used: number | null;
+  usage_spark_remaining: number | null;
+  usage_spark_limit_window_seconds: number | null;
   usage_spark_reset_at: number | null;
   usage_spark_reset_after_seconds: number | null;
   quota_signal_source: string | null;
@@ -88,8 +99,6 @@ export interface AuthAccount {
   last_probed_at: string | null;
   updated_at: string;
   // runtime-only fields (not stored in DB columns)
-  usage_remaining_ratio?: number | null;
-  usage_spark_remaining_ratio?: number | null;
   quota_remaining_ratio?: number | null;
   quota_remaining_ratio_source?: string | null;
   quota_threshold_triggered?: number;

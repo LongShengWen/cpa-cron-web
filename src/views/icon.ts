@@ -1,9 +1,19 @@
+import { PWA_METADATA } from './pwa';
+
 export const APP_ICON_HREF = '/assets/app-icon.svg';
 
 export const APP_ICON_LINK_TAGS = `
 <link rel="icon" type="image/svg+xml" href="${APP_ICON_HREF}">
 <link rel="shortcut icon" href="${APP_ICON_HREF}">
-<meta name="theme-color" content="#6c5ce7">
+<link rel="apple-touch-icon" sizes="180x180" href="${PWA_METADATA.appleTouchIconHref}">
+<link rel="manifest" href="${PWA_METADATA.manifestHref}">
+<meta name="theme-color" content="${PWA_METADATA.themeColor}">
+<meta name="application-name" content="${PWA_METADATA.appName}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="${PWA_METADATA.shortName}">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
 `.trim();
 
 export const APP_ICON_SVG = `<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">

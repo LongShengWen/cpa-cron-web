@@ -101,6 +101,8 @@ function extractRemainingRatio(rateLimit: Record<string, unknown> | null): numbe
   const totalKeys = ['total', 'limit', 'max', 'maximum', 'quota', 'request_limit', 'requests_limit', 'total_requests'];
   const remainingKeys = ['remaining', 'remaining_requests', 'requests_remaining', 'available', 'available_requests', 'left'];
   const usedKeys = ['used', 'consumed', 'used_requests', 'requests_used', 'spent'];
+  const remainingPercentKeys = ['remaining_percent'];
+  const usedPercentKeys = ['used_percent'];
 
   const windows: Record<string, unknown>[] = [rateLimit];
   for (const wk of ['primary_window', 'window', 'current_window']) {
@@ -117,12 +119,81 @@ function extractRemainingRatio(rateLimit: Record<string, unknown> | null): numbe
     const ratio = remaining != null ? remaining / total : (total - (used ?? 0)) / total;
     return normalizeOptionalRatio(ratio);
   }
+
+  for (const w of windows) {
+    const remainingPercent = pickFirstNumber(w, remainingPercentKeys);
+    if (remainingPercent != null) {
+      return normalizeOptionalRatio(remainingPercent > 1 ? remainingPercent / 100 : remainingPercent);
+    }
+    const usedPercent = pickFirstNumber(w, usedPercentKeys);
+    if (usedPercent != null) {
+      const normalizedUsed = usedPercent > 1 ? usedPercent / 100 : usedPercent;
+      return normalizeOptionalRatio(1 - normalizedUsed);
+    }
+  }
   return null;
 }
 
-function findSparkRateLimit(body: Record<string, unknown>): Record<string, unknown> | null {
+function extractRateLimitSnapshot(rateLimit: Record<string, unknown> | null): {
+  total: number | null;
+  used: number | null;
+  remaining: number | null;
+  windowSeconds: number | null;
+} {
+  if (!rateLimit || typeof rateLimit !== 'object') {
+    return { total: null, used: null, remaining: null, windowSeconds: null };
+  }
+
+  const totalKeys = ['total', 'limit', 'max', 'maximum', 'quota', 'request_limit', 'requests_limit', 'total_requests'];
+  const remainingKeys = ['remaining', 'remaining_requests', 'requests_remaining', 'available', 'available_requests', 'left'];
+  const usedKeys = ['used', 'consumed', 'used_requests', 'requests_used', 'spent'];
+  const windowSecondsKeys = ['limit_window_seconds', 'window_seconds', 'window_size_seconds', 'period_seconds'];
+
+  const windows: Record<string, unknown>[] = [rateLimit];
+  for (const wk of ['primary_window', 'window', 'current_window']) {
+    const w = rateLimit[wk];
+    if (w && typeof w === 'object' && !Array.isArray(w)) {
+      windows.push(w as Record<string, unknown>);
+    }
+  }
+
+  for (const w of windows) {
+    const total = pickFirstNumber(w, totalKeys) ?? pickFirstNumber(rateLimit, totalKeys);
+    let remaining = pickFirstNumber(w, remainingKeys) ?? pickFirstNumber(rateLimit, remainingKeys);
+    let used = pickFirstNumber(w, usedKeys) ?? pickFirstNumber(rateLimit, usedKeys);
+    const windowSeconds = pickFirstNumber(w, windowSecondsKeys) ?? pickFirstNumber(rateLimit, windowSecondsKeys);
+
+    if (total == null && remaining == null && used == null && windowSeconds == null) continue;
+
+    if (remaining == null && total != null && used != null) {
+      remaining = Math.max(0, total - used);
+    }
+    if (used == null && total != null && remaining != null) {
+      used = Math.max(0, total - remaining);
+    }
+
+    return {
+      total: total != null ? Math.max(0, total) : null,
+      used: used != null ? Math.max(0, used) : null,
+      remaining: remaining != null ? Math.max(0, remaining) : null,
+      windowSeconds: windowSeconds != null ? Math.max(0, Math.round(windowSeconds)) : null,
+    };
+  }
+
+  return { total: null, used: null, remaining: null, windowSeconds: null };
+}
+
+function findSparkRateLimit(body: Record<string, unknown>): {
+  rateLimit: Record<string, unknown> | null;
+  source: 'spark' | 'code_review' | '';
+} {
+  const codeReview = body.code_review_rate_limit;
+  if (codeReview && typeof codeReview === 'object' && !Array.isArray(codeReview)) {
+    return { rateLimit: codeReview as Record<string, unknown>, source: 'code_review' };
+  }
+
   const additional = body.additional_rate_limits;
-  if (!Array.isArray(additional)) return null;
+  if (!Array.isArray(additional)) return { rateLimit: null, source: '' };
 
   const candidates: Array<{ item: Record<string, unknown>; rl: Record<string, unknown> }> = [];
   for (const item of additional) {
@@ -134,13 +205,13 @@ function findSparkRateLimit(body: Record<string, unknown>): Record<string, unkno
 
   for (const { item, rl } of candidates) {
     const mf = String(item.metered_feature ?? '').trim().toLowerCase();
-    if (mf === SPARK_METERED_FEATURE) return rl;
+    if (mf === SPARK_METERED_FEATURE) return { rateLimit: rl, source: 'spark' };
   }
   for (const { item, rl } of candidates) {
     const ln = String(item.limit_name ?? '').trim().toLowerCase();
-    if (ln.includes('spark')) return rl;
+    if (ln.includes('spark')) return { rateLimit: rl, source: 'spark' };
   }
-  return null;
+  return { rateLimit: null, source: '' };
 }
 
 // ── quota signal resolution ──────────────────────────────────────────
@@ -155,12 +226,13 @@ export function resolveQuotaSignal(record: Record<string, unknown>): {
   const sparkAllowed = normalizeOptionalFlag(record.usage_spark_allowed);
   const primaryLR = normalizeOptionalFlag(record.usage_limit_reached);
   const primaryAllowed = normalizeOptionalFlag(record.usage_allowed);
+  const sparkSource = String(record.usage_spark_source ?? '').trim().toLowerCase();
 
-  if (planType === 'pro' && sparkLR != null) {
+  if (planType === 'pro' && sparkSource && sparkLR != null) {
     return {
       limitReached: sparkLR,
       allowed: sparkAllowed ?? primaryAllowed,
-      source: 'spark',
+      source: sparkSource,
     };
   }
   return { limitReached: primaryLR, allowed: primaryAllowed, source: 'primary' };
@@ -315,10 +387,21 @@ export function buildAuthRecord(
     usage_limit_reached: ex.usage_limit_reached ?? null,
     usage_plan_type: ex.usage_plan_type ?? null,
     usage_email: ex.usage_email ?? null,
+    usage_remaining_ratio: ex.usage_remaining_ratio ?? null,
+    usage_total: ex.usage_total ?? null,
+    usage_used: ex.usage_used ?? null,
+    usage_remaining: ex.usage_remaining ?? null,
+    usage_limit_window_seconds: ex.usage_limit_window_seconds ?? null,
     usage_reset_at: ex.usage_reset_at ?? null,
     usage_reset_after_seconds: ex.usage_reset_after_seconds ?? null,
+    usage_spark_source: ex.usage_spark_source ?? null,
     usage_spark_allowed: ex.usage_spark_allowed ?? null,
     usage_spark_limit_reached: ex.usage_spark_limit_reached ?? null,
+    usage_spark_remaining_ratio: ex.usage_spark_remaining_ratio ?? null,
+    usage_spark_total: ex.usage_spark_total ?? null,
+    usage_spark_used: ex.usage_spark_used ?? null,
+    usage_spark_remaining: ex.usage_spark_remaining ?? null,
+    usage_spark_limit_window_seconds: ex.usage_spark_limit_window_seconds ?? null,
     usage_spark_reset_at: ex.usage_spark_reset_at ?? null,
     usage_spark_reset_after_seconds: ex.usage_spark_reset_after_seconds ?? null,
     quota_signal_source: ex.quota_signal_source ?? null,
@@ -534,22 +617,34 @@ export async function probeWhamUsage(
       result.usage_limit_reached = (rateLimit && typeof rateLimit.limit_reached === 'boolean')
         ? (rateLimit.limit_reached ? 1 : 0) : null;
       result.usage_remaining_ratio = extractRemainingRatio(rateLimit as Record<string, unknown> | null);
+      const primarySnapshot = extractRateLimitSnapshot(rateLimit as Record<string, unknown> | null);
       result.usage_plan_type = (String(parsedBody.plan_type ?? '').trim()) || null;
       result.usage_email = (String(parsedBody.email ?? '').trim()) || null;
+      result.usage_total = primarySnapshot.total;
+      result.usage_used = primarySnapshot.used;
+      result.usage_remaining = primarySnapshot.remaining;
+      result.usage_limit_window_seconds = primarySnapshot.windowSeconds;
       result.usage_reset_at = (primaryWindow && primaryWindow.reset_at != null)
         ? Number(primaryWindow.reset_at) : null;
       result.usage_reset_after_seconds = (primaryWindow && primaryWindow.reset_after_seconds != null)
         ? Number(primaryWindow.reset_after_seconds) : null;
 
       // Spark
-      const sparkRL = findSparkRateLimit(parsedBody);
+      const sparkInfo = findSparkRateLimit(parsedBody);
+      const sparkRL = sparkInfo.rateLimit;
       const sparkPW = sparkRL && typeof sparkRL === 'object'
         ? sparkRL.primary_window as Record<string, unknown> | null : null;
+      result.usage_spark_source = sparkInfo.source || null;
       result.usage_spark_allowed = (sparkRL && typeof sparkRL.allowed === 'boolean')
         ? (sparkRL.allowed ? 1 : 0) : null;
       result.usage_spark_limit_reached = (sparkRL && typeof sparkRL.limit_reached === 'boolean')
         ? (sparkRL.limit_reached ? 1 : 0) : null;
       result.usage_spark_remaining_ratio = extractRemainingRatio(sparkRL);
+      const sparkSnapshot = extractRateLimitSnapshot(sparkRL);
+      result.usage_spark_total = sparkSnapshot.total;
+      result.usage_spark_used = sparkSnapshot.used;
+      result.usage_spark_remaining = sparkSnapshot.remaining;
+      result.usage_spark_limit_window_seconds = sparkSnapshot.windowSeconds;
       result.usage_spark_reset_at = (sparkPW && sparkPW.reset_at != null)
         ? Number(sparkPW.reset_at) : null;
       result.usage_spark_reset_after_seconds = (sparkPW && sparkPW.reset_after_seconds != null)

@@ -142,6 +142,9 @@ export function authMiddleware() {
       path === '/healthz' ||
       path === '/login' ||
       path === '/favicon.ico' ||
+      path === '/apple-touch-icon.png' ||
+      path === '/manifest.webmanifest' ||
+      path === '/sw.js' ||
       path === '/api/auth/login' ||
       path.startsWith('/assets/')
     ) {

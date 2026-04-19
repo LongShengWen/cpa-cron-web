@@ -84,6 +84,8 @@ class LocalD1PreparedStatement {
 }
 
 class LocalD1Database {
+  readonly __local_runtime = true;
+
   constructor(private readonly sqlite: SqliteDatabase) {}
 
   prepare(sql: string): D1PreparedStatement {

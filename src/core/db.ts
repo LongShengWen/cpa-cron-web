@@ -8,8 +8,10 @@ const AUTH_ACCOUNT_COLUMNS = [
   'status', 'status_message', 'chatgpt_account_id', 'id_token_plan_type',
   'auth_updated_at', 'auth_modtime', 'auth_last_refresh',
   'api_http_status', 'api_status_code', 'usage_allowed', 'usage_limit_reached',
-  'usage_plan_type', 'usage_email', 'usage_reset_at', 'usage_reset_after_seconds',
-  'usage_spark_allowed', 'usage_spark_limit_reached',
+  'usage_plan_type', 'usage_email', 'usage_remaining_ratio', 'usage_total', 'usage_used', 'usage_remaining', 'usage_limit_window_seconds',
+  'usage_reset_at', 'usage_reset_after_seconds',
+  'usage_spark_source', 'usage_spark_allowed', 'usage_spark_limit_reached', 'usage_spark_remaining_ratio',
+  'usage_spark_total', 'usage_spark_used', 'usage_spark_remaining', 'usage_spark_limit_window_seconds',
   'usage_spark_reset_at', 'usage_spark_reset_after_seconds',
   'quota_signal_source', 'is_invalid_401', 'is_quota_limited', 'is_recovered',
   'probe_error_kind', 'probe_error_text', 'managed_reason',
@@ -23,6 +25,8 @@ const DELETE_CHUNK_SIZE = 50;
 const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
 const HISTORY_RETENTION_DAYS = 1;
 const ACTIVITY_LOG_RETENTION_DAYS = 1;
+const HISTORY_RETENTION_PURGE_INTERVAL_MS = 10 * 60 * 1000;
+let lastHistoricalPurgeAt = 0;
 
 function parseStoredTime(value: unknown): number | null {
   if (typeof value !== 'string') return null;
@@ -71,6 +75,22 @@ async function purgeHistoricalRetention(db: D1Database): Promise<void> {
     clearFinishedTasksOlderThanDays(db, HISTORY_RETENTION_DAYS),
     clearActivityLogOlderThanDays(db, ACTIVITY_LOG_RETENTION_DAYS),
   ]);
+}
+
+async function maybePurgeHistoricalRetention(
+  db: D1Database,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  const now = Date.now();
+  if (!opts.force && now - lastHistoricalPurgeAt < HISTORY_RETENTION_PURGE_INTERVAL_MS) {
+    return;
+  }
+  lastHistoricalPurgeAt = now;
+  try {
+    await purgeHistoricalRetention(db);
+  } catch {
+    // 历史清理是尽力而为，不能影响主流程
+  }
 }
 
 export async function upsertAuthAccounts(
@@ -166,7 +186,7 @@ export async function finishScanRun(
       runId
     )
     .run();
-  await purgeHistoricalRetention(db);
+  await maybePurgeHistoricalRetention(db);
 }
 
 export async function getLastScanRun(db: D1Database): Promise<Record<string, unknown> | null> {
@@ -268,8 +288,32 @@ export async function getAccounts(
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const sortCol = opts.sort || 'updated_at';
   const sortOrder = opts.order || 'desc';
-  const allowedCols = new Set(AUTH_ACCOUNT_COLUMNS);
-  const safeSort = allowedCols.has(sortCol) ? sortCol : 'updated_at';
+  const sortExprMap: Record<string, string> = {
+    updated_at: 'updated_at',
+    name: 'name',
+    email: 'email',
+    provider: 'provider',
+    api_status_code: 'api_status_code',
+    last_probed_at: 'last_probed_at',
+    status_sort: `
+      CASE
+        WHEN disabled = 1 AND is_invalid_401 = 1 THEN 70
+        WHEN is_invalid_401 = 1 THEN 60
+        WHEN disabled = 1 AND is_quota_limited = 1 THEN 50
+        WHEN is_quota_limited = 1 THEN 40
+        WHEN disabled = 1 AND is_recovered = 1 THEN 35
+        WHEN is_recovered = 1 THEN 30
+        WHEN disabled = 1 THEN 20
+        WHEN probe_error_kind IS NOT NULL AND probe_error_kind != '' THEN 10
+        ELSE 0
+      END
+    `,
+    quota_sort: 'COALESCE(usage_remaining_ratio, -1)',
+    quota_reset_sort: 'COALESCE(usage_reset_at, -1)',
+    code_review_quota_sort: 'COALESCE(usage_spark_remaining_ratio, -1)',
+    code_review_quota_reset_sort: 'COALESCE(usage_spark_reset_at, -1)',
+  };
+  const safeSort = sortExprMap[sortCol] || 'updated_at';
   const safeOrder = sortOrder === 'asc' ? 'ASC' : 'DESC';
 
   const countResult = await db
@@ -283,7 +327,7 @@ export async function getAccounts(
 
   const result = await db
     .prepare(
-      `SELECT * FROM auth_accounts ${where} ORDER BY ${safeSort} ${safeOrder} LIMIT ? OFFSET ?`
+      `SELECT * FROM auth_accounts ${where} ORDER BY ${safeSort} ${safeOrder}, updated_at DESC LIMIT ? OFFSET ?`
     )
     .bind(...params, limit, offset)
     .all();
@@ -377,28 +421,34 @@ export async function updateAccountDisabledState(
 
 export async function getDashboardStats(db: D1Database): Promise<Record<string, unknown>> {
   const stats = await db.batch([
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE disabled = 0 AND is_invalid_401 = 0 AND is_quota_limited = 0 AND (probe_error_kind IS NULL OR probe_error_kind = \'\')'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE disabled = 1'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE is_invalid_401 = 1'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE is_quota_limited = 1'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE is_recovered = 1'),
-    db.prepare('SELECT COUNT(*) as cnt FROM auth_accounts WHERE probe_error_kind IS NOT NULL AND probe_error_kind != \'\''),
+    db.prepare(`
+      SELECT
+        COUNT(*) AS total_accounts,
+        SUM(CASE WHEN disabled = 0 AND is_invalid_401 = 0 AND is_quota_limited = 0 AND (probe_error_kind IS NULL OR probe_error_kind = '') THEN 1 ELSE 0 END) AS active_accounts,
+        SUM(CASE WHEN disabled = 1 THEN 1 ELSE 0 END) AS disabled_accounts,
+        SUM(CASE WHEN is_invalid_401 = 1 THEN 1 ELSE 0 END) AS invalid_401,
+        SUM(CASE WHEN is_quota_limited = 1 THEN 1 ELSE 0 END) AS quota_limited,
+        SUM(CASE WHEN is_recovered = 1 THEN 1 ELSE 0 END) AS recovered,
+        SUM(CASE WHEN probe_error_kind IS NOT NULL AND probe_error_kind != '' THEN 1 ELSE 0 END) AS probe_errors
+      FROM auth_accounts
+    `),
     db.prepare('SELECT * FROM scan_runs ORDER BY run_id DESC LIMIT 1'),
     db.prepare('SELECT * FROM activity_log ORDER BY id DESC LIMIT 10'),
-    db.prepare("SELECT created_at FROM activity_log WHERE action = 'cron_maintain_started' ORDER BY id DESC LIMIT 1"),
-    db.prepare("SELECT created_at FROM activity_log WHERE action = 'cron_maintain_completed' ORDER BY id DESC LIMIT 1"),
-    db.prepare("SELECT created_at FROM activity_log WHERE action = 'cron_maintain_failed' ORDER BY id DESC LIMIT 1"),
+    db.prepare(`
+      SELECT
+        MAX(CASE WHEN action = 'cron_maintain_started' THEN created_at END) AS cron_started,
+        MAX(CASE WHEN action = 'cron_maintain_completed' THEN created_at END) AS cron_completed,
+        MAX(CASE WHEN action = 'cron_maintain_failed' THEN created_at END) AS cron_failed
+      FROM activity_log
+    `),
   ]);
 
-  const cnt = (r: D1Result, idx = 0) => {
-    const rows = r.results as Record<string, unknown>[];
-    return rows.length > 0 ? Number((rows[idx] as Record<string, unknown>).cnt ?? 0) : 0;
-  };
+  const aggregateRow = ((stats[0].results as Record<string, unknown>[])[0] ?? {}) as Record<string, unknown>;
 
-  const cronStarted = ((stats[9].results as Record<string, unknown>[])[0]?.created_at as string | undefined) ?? null;
-  const cronCompleted = ((stats[10].results as Record<string, unknown>[])[0]?.created_at as string | undefined) ?? null;
-  const cronFailed = ((stats[11].results as Record<string, unknown>[])[0]?.created_at as string | undefined) ?? null;
+  const cronRow = ((stats[3].results as Record<string, unknown>[])[0] ?? {}) as Record<string, unknown>;
+  const cronStarted = (cronRow.cron_started as string | undefined) ?? null;
+  const cronCompleted = (cronRow.cron_completed as string | undefined) ?? null;
+  const cronFailed = (cronRow.cron_failed as string | undefined) ?? null;
 
   const parseDbTime = (value: string | null): number | null => {
     if (!value) return null;
@@ -435,15 +485,15 @@ export async function getDashboardStats(db: D1Database): Promise<Record<string, 
   }
 
   return {
-    total_accounts: cnt(stats[0]),
-    active_accounts: cnt(stats[1]),
-    disabled_accounts: cnt(stats[2]),
-    invalid_401: cnt(stats[3]),
-    quota_limited: cnt(stats[4]),
-    recovered: cnt(stats[5]),
-    probe_errors: cnt(stats[6]),
-    last_scan: (stats[7].results as Record<string, unknown>[])[0] ?? null,
-    recent_activity: stats[8].results as Record<string, unknown>[],
+    total_accounts: Number(aggregateRow.total_accounts ?? 0),
+    active_accounts: Number(aggregateRow.active_accounts ?? 0),
+    disabled_accounts: Number(aggregateRow.disabled_accounts ?? 0),
+    invalid_401: Number(aggregateRow.invalid_401 ?? 0),
+    quota_limited: Number(aggregateRow.quota_limited ?? 0),
+    recovered: Number(aggregateRow.recovered ?? 0),
+    probe_errors: Number(aggregateRow.probe_errors ?? 0),
+    last_scan: (stats[1].results as Record<string, unknown>[])[0] ?? null,
+    recent_activity: stats[2].results as Record<string, unknown>[],
     cron_summary: {
       last_started_at: cronStarted,
       last_completed_at: cronCompleted,
@@ -463,7 +513,25 @@ export async function logActivity(
     .prepare('INSERT INTO activity_log (action, detail, username) VALUES (?, ?, ?)')
     .bind(action, detail, username ?? null)
     .run();
-  await purgeHistoricalRetention(db);
+  await maybePurgeHistoricalRetention(db);
+}
+
+export async function getAccountsMetaSummary(
+  db: D1Database
+): Promise<{ latest_probed_at: string; latest_updated_at: string }> {
+  const row = await db
+    .prepare(`
+      SELECT
+        COALESCE(MAX(last_probed_at), '') AS latest_probed_at,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM auth_accounts
+    `)
+    .first<{ latest_probed_at: string; latest_updated_at: string }>();
+
+  return {
+    latest_probed_at: String(row?.latest_probed_at || '').trim(),
+    latest_updated_at: String(row?.latest_updated_at || '').trim(),
+  };
 }
 
 export async function getActivityLog(
@@ -549,7 +617,7 @@ export async function updateTask(
   if (sets.length === 0) return;
   vals.push(id);
   await db.prepare(`UPDATE task_queue SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
-  await purgeHistoricalRetention(db);
+  await maybePurgeHistoricalRetention(db);
 }
 
 export async function getRecentTasks(

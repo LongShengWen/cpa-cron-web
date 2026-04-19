@@ -69,6 +69,21 @@ function normalizePositiveInt(value: number | undefined, fallback: number): numb
   return Math.max(1, Math.floor(value));
 }
 
+function isLocalRuntimeDatabase(db: D1Database): boolean {
+  const runtimeDb = db as D1Database & { __local_runtime?: boolean };
+  return runtimeDb.__local_runtime === true;
+}
+
+function resolveProbeLimit(db: D1Database, defaultLimit: number): number {
+  // 仅本地 Docker / Node.js runtime 使用自建 SQLite 适配层时，
+  // 才放开全量探测；Cloudflare Worker 在线上启用了 nodejs_compat，
+  // 同样可能暴露 process.versions.node，因此不能再用 Node 特征判定。
+  // 用户要求在 Docker 下扫描、维护都必须基于远端 CPA 源做全量处理，
+  // 因此这里统一放开探测上限，改为单次任务全量探测。
+  if (isLocalRuntimeDatabase(db)) return Number.MAX_SAFE_INTEGER;
+  return defaultLimit;
+}
+
 function selectRotatingRecords<T>(
   records: T[],
   limit: number,
@@ -359,7 +374,8 @@ export async function runScan(
 ): Promise<EngineResult> {
   const finalizeTask = options?.finalizeTask !== false;
   const cursorKey = (options?.cursorKey || DEFAULT_SCAN_PROBE_CURSOR_KEY).trim() || DEFAULT_SCAN_PROBE_CURSOR_KEY;
-  const maxProbeRecords = normalizePositiveInt(options?.maxProbeRecords, MAX_SCAN_PROBE_RECORDS_PER_RUN);
+  const requestedProbeLimit = normalizePositiveInt(options?.maxProbeRecords, MAX_SCAN_PROBE_RECORDS_PER_RUN);
+  const maxProbeRecords = resolveProbeLimit(db, requestedProbeLimit);
   const runId = await startScanRun(db, 'scan', config as unknown as Record<string, unknown>);
   let totalFiles = 0;
   let filteredCount = 0;
@@ -630,8 +646,10 @@ export async function runMaintain(
     });
 
     const existingState = await loadExistingState(db);
+    const probedNameSet = new Set((scanResult.probed_names || []).map((name) => String(name)));
     const candidateRecords = Array.from(existingState.values()).filter((r) =>
-      matchesFilters(r, config.target_type, config.provider)
+      matchesFilters(r, config.target_type, config.provider) &&
+      probedNameSet.has(String(r.name))
     );
     const invalidRecords = candidateRecords.filter((r) =>
       Number(r.is_invalid_401) === 1 || statusMessageIndicatesInvalid(r)

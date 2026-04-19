@@ -8,6 +8,7 @@ import {
 import { loadConfig, saveConfig, validateConfig, loadCacheMeta, loadCronMeta, saveCronMeta, validateCronExpression } from '../core/config';
 import {
   getDashboardStats,
+  getAccountsMetaSummary,
   getAccounts,
   getAccountByName,
   deleteAccountFromDB,
@@ -56,6 +57,192 @@ function statusMessageIndicatesInvalid(record: Record<string, unknown>): boolean
   const raw = String(record.status_message ?? '').trim();
   if (!raw) return false;
   return /(unauthorized|401|invalid token|token expired|expired|payment_required|not_found|invalidated|authentication token|sign(?:ed)? in again|signing in again|login again|log in again)/i.test(raw);
+}
+
+type SingleMaintainResult = {
+  ok: boolean;
+  name: string;
+  action?: string;
+  action_result?: Record<string, unknown> | null;
+  removed?: boolean;
+  account?: Record<string, unknown> | null;
+  error?: string;
+};
+
+async function maintainAccountInternal(
+  db: D1Database,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  username: string,
+  name: string,
+  existing: Record<string, unknown> | null,
+  remoteItem: Record<string, unknown> | null
+): Promise<SingleMaintainResult> {
+  if (!existing) {
+    return { ok: false, name, error: `本地未找到账号: ${name}` };
+  }
+  if (!remoteItem) {
+    return { ok: false, name, error: `远端 CPA 当前未找到该账号: ${name}，建议先执行一次全量扫描` };
+  }
+
+  const nowIso = new Date().toISOString();
+  const inventoryRecord = buildAuthRecord(remoteItem, existing, nowIso);
+  await upsertAuthAccounts(db, [inventoryRecord]);
+
+  const probedRecord = await probeWhamUsage(
+    config.base_url,
+    config.token,
+    inventoryRecord,
+    config.timeout,
+    config.retries,
+    config.user_agent,
+    config.quota_disable_threshold
+  );
+
+  let workingRecord: Record<string, unknown> = { ...probedRecord, updated_at: new Date().toISOString() };
+  let action = 'none';
+  let actionResult: Record<string, unknown> | null = null;
+
+  const invalid = Number(workingRecord.is_invalid_401 ?? 0) === 1 || statusMessageIndicatesInvalid(workingRecord);
+  const quotaLimited = !invalid && (
+    Number(workingRecord.is_quota_limited ?? 0) === 1 || statusMessageIndicatesQuota(workingRecord)
+  );
+  const recovered = Number(workingRecord.is_recovered ?? 0) === 1;
+
+  if (invalid) {
+    if (config.delete_401 && Number(workingRecord.api_status_code ?? 0) === 401) {
+      action = 'delete_invalid';
+      actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
+      if (actionResult.ok) {
+        await deleteAccountFromDB(db, name);
+        await logActivity(db, 'maintain_single_account', `单账号维护删除401/失效账号: ${name}`, username);
+        return {
+          ok: true,
+          name,
+          action,
+          action_result: actionResult,
+          removed: true,
+          account: null,
+        };
+      }
+      workingRecord.last_action = 'delete_invalid';
+      workingRecord.last_action_status = 'failed';
+      workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
+    } else if (Number(workingRecord.disabled ?? 0) !== 1) {
+      action = 'disable_invalid';
+      actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
+      workingRecord.last_action = 'disable_invalid';
+      workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+      workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
+      if (actionResult.ok) {
+        workingRecord.disabled = 1;
+        workingRecord.managed_reason = 'invalid_disabled';
+        workingRecord.is_recovered = 0;
+      }
+    } else {
+      action = 'mark_invalid_disabled';
+      workingRecord.disabled = 1;
+      workingRecord.managed_reason = 'invalid_disabled';
+      workingRecord.is_recovered = 0;
+      workingRecord.last_action = 'mark_invalid_disabled';
+      workingRecord.last_action_status = 'success';
+      workingRecord.last_action_error = null;
+    }
+  } else if (quotaLimited) {
+    if (config.quota_action === 'delete') {
+      action = 'delete_quota';
+      actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
+      if (actionResult.ok) {
+        await deleteAccountFromDB(db, name);
+        await logActivity(db, 'maintain_single_account', `单账号维护删除限额账号: ${name}`, username);
+        return {
+          ok: true,
+          name,
+          action,
+          action_result: actionResult,
+          removed: true,
+          account: null,
+        };
+      }
+      workingRecord.last_action = 'delete_quota';
+      workingRecord.last_action_status = 'failed';
+      workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
+    } else if (Number(workingRecord.disabled ?? 0) !== 1) {
+      action = 'disable_quota';
+      actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
+      workingRecord.last_action = 'disable_quota';
+      workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+      workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
+      if (actionResult.ok) {
+        workingRecord.disabled = 1;
+        workingRecord.managed_reason = 'quota_disabled';
+        workingRecord.is_recovered = 0;
+      }
+    } else {
+      action = 'mark_quota_disabled';
+      workingRecord.disabled = 1;
+      workingRecord.managed_reason = 'quota_disabled';
+      workingRecord.is_recovered = 0;
+      workingRecord.last_action = 'mark_quota_disabled';
+      workingRecord.last_action_status = 'success';
+      workingRecord.last_action_error = null;
+    }
+  } else if (
+    recovered &&
+    config.auto_reenable &&
+    Number(workingRecord.disabled ?? 0) === 1 &&
+    (config.reenable_scope === 'signal' || String(workingRecord.managed_reason ?? '') === 'quota_disabled')
+  ) {
+    action = 'reenable';
+    actionResult = await setAccountDisabled(config.base_url, config.token, name, false, config.timeout) as unknown as Record<string, unknown>;
+    workingRecord.last_action = 'reenable_quota';
+    workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
+    workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '启用失败');
+    if (actionResult.ok) {
+      workingRecord.disabled = 0;
+      workingRecord.managed_reason = null;
+      workingRecord.is_recovered = 0;
+      workingRecord.is_quota_limited = 0;
+      workingRecord.probe_error_kind = null;
+      workingRecord.probe_error_text = null;
+    }
+  } else {
+    action = 'refresh_only';
+    workingRecord.last_action = 'maintain_single_probe';
+    workingRecord.last_action_status = 'success';
+    workingRecord.last_action_error = null;
+  }
+
+  workingRecord.updated_at = new Date().toISOString();
+  await upsertAuthAccounts(db, [workingRecord]);
+
+  const actionSummary = actionResult
+    ? ` | 动作=${action} | 结果=${actionResult.ok ? '成功' : '失败'}${actionResult.error ? ` | 错误=${String(actionResult.error)}` : ''}`
+    : ` | 动作=${action}`;
+  await logActivity(
+    db,
+    'maintain_single_account',
+    `单账号维护: ${name} | invalid=${invalid ? 1 : 0} | quota=${quotaLimited ? 1 : 0} | recovered=${recovered ? 1 : 0}${actionSummary}`,
+    username
+  );
+
+  return {
+    ok: true,
+    name,
+    action,
+    action_result: actionResult,
+    removed: false,
+    account: workingRecord,
+  };
+}
+
+function normalizeBatchNames(body: { names?: unknown }): string[] {
+  if (!Array.isArray(body.names)) return [];
+  const uniq = new Set<string>();
+  for (const item of body.names) {
+    const name = String(item ?? '').trim();
+    if (name) uniq.add(name);
+  }
+  return Array.from(uniq);
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────
@@ -230,14 +417,136 @@ api.get('/accounts', async (c) => {
 api.get('/accounts/meta', async (c) => {
   const config = await loadConfig(c.env.DB, c.env);
   const cache = await loadCacheMeta(c.env.DB);
+  const summary = await getAccountsMetaSummary(c.env.DB);
   return c.json({
     current_base_url: config.base_url,
     cache_base_url: cache.cache_base_url,
     cache_last_success_at: cache.cache_last_success_at,
     cache_last_status: cache.cache_last_status,
     cache_last_error: cache.cache_last_error,
+    latest_probed_at: summary.latest_probed_at,
+    latest_updated_at: summary.latest_updated_at,
     cache_matches_current: !!config.base_url && !!cache.cache_base_url && config.base_url === cache.cache_base_url,
   });
+});
+
+api.post('/accounts/batch/maintain', async (c) => {
+  const body = await c.req.json<{ names?: string[] }>();
+  const names = normalizeBatchNames(body);
+  if (names.length === 0) return c.json({ ok: false, error: '请至少选择一个账号' }, 400);
+
+  const config = await loadConfig(c.env.DB, c.env);
+  if (!config.base_url || !config.token) {
+    return c.json({ ok: false, error: 'CPA 配置不完整' }, 400);
+  }
+
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+
+  try {
+    const files = await fetchAuthFiles(config.base_url, config.token, config.timeout);
+    const remoteMap = new Map<string, Record<string, unknown>>();
+    for (const item of files) {
+      const name = String((item as Record<string, unknown>).name ?? '').trim();
+      if (name) remoteMap.set(name, item as Record<string, unknown>);
+    }
+
+    const results: SingleMaintainResult[] = [];
+    for (const name of names) {
+      const existing = await getAccountByName(c.env.DB, name);
+      const remoteItem = remoteMap.get(name) ?? null;
+      results.push(await maintainAccountInternal(c.env.DB, config, username, name, existing, remoteItem));
+    }
+
+    const success = results.filter((item) => item.ok).length;
+    const failed = results.length - success;
+    const removed = results.filter((item) => item.removed).length;
+    const actions = results.reduce<Record<string, number>>((acc, item) => {
+      const key = String(item.action ?? '');
+      if (key) acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    await logActivity(
+      c.env.DB,
+      'maintain_batch_account',
+      `批量维护账号: 总数=${results.length} 成功=${success} 失败=${failed} 删除=${removed}`,
+      username
+    );
+
+    return c.json({ ok: true, total: results.length, success, failed, removed, actions, results });
+  } catch (error) {
+    return c.json({ ok: false, error: String(error) }, 500);
+  }
+});
+
+api.post('/accounts/batch/toggle', async (c) => {
+  const body = await c.req.json<{ names?: string[]; disabled?: boolean }>();
+  const names = normalizeBatchNames(body);
+  if (names.length === 0) return c.json({ ok: false, error: '请至少选择一个账号' }, 400);
+  if (typeof body.disabled !== 'boolean') return c.json({ ok: false, error: 'disabled 参数无效' }, 400);
+
+  const config = await loadConfig(c.env.DB, c.env);
+  if (!config.base_url || !config.token) {
+    return c.json({ ok: false, error: 'CPA 配置不完整' }, 400);
+  }
+
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+  const results: Array<Record<string, unknown>> = [];
+
+  for (const name of names) {
+    const result = await setAccountDisabled(config.base_url, config.token, name, body.disabled, config.timeout) as unknown as Record<string, unknown>;
+    if (result.ok) {
+      await updateAccountDisabledState(c.env.DB, name, body.disabled);
+    }
+    results.push({ name, ...result });
+  }
+
+  const success = results.filter((item) => item.ok).length;
+  const failed = results.length - success;
+  await logActivity(
+    c.env.DB,
+    'toggle_batch_account',
+    `批量${body.disabled ? '禁用' : '启用'}账号: 总数=${results.length} 成功=${success} 失败=${failed}`,
+    username
+  );
+
+  return c.json({ ok: true, total: results.length, success, failed, results });
+});
+
+api.post('/accounts/batch/delete', async (c) => {
+  const body = await c.req.json<{ names?: string[] }>();
+  const names = normalizeBatchNames(body);
+  if (names.length === 0) return c.json({ ok: false, error: '请至少选择一个账号' }, 400);
+
+  const config = await loadConfig(c.env.DB, c.env);
+  if (!config.base_url || !config.token) {
+    return c.json({ ok: false, error: 'CPA 配置不完整' }, 400);
+  }
+
+  const user = c.get('user') as Record<string, unknown>;
+  const username = String(user?.username ?? '');
+  const results: Array<Record<string, unknown>> = [];
+
+  for (const name of names) {
+    const result = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
+    if (result.ok) {
+      await deleteAccountFromDB(c.env.DB, name);
+    }
+    results.push({ name, ...result });
+  }
+
+  const success = results.filter((item) => item.ok).length;
+  const failed = results.length - success;
+  await logActivity(
+    c.env.DB,
+    'delete_batch_account',
+    `批量删除账号: 总数=${results.length} 成功=${success} 失败=${failed}`,
+    username
+  );
+
+  return c.json({ ok: true, total: results.length, success, failed, results });
 });
 
 api.delete('/accounts/:name', async (c) => {
@@ -285,163 +594,12 @@ api.post('/accounts/:name/maintain', async (c) => {
 
   const user = c.get('user') as Record<string, unknown>;
   const username = String(user?.username ?? '');
-  const nowIso = new Date().toISOString();
 
   try {
     const files = await fetchAuthFiles(config.base_url, config.token, config.timeout);
     const remoteItem = files.find((item) => String((item as Record<string, unknown>).name ?? '').trim() === name) as Record<string, unknown> | undefined;
-    if (!remoteItem) {
-      return c.json({ ok: false, error: `远端 CPA 当前未找到该账号: ${name}，建议先执行一次全量扫描` }, 404);
-    }
-
-    const inventoryRecord = buildAuthRecord(remoteItem, existing, nowIso);
-    await upsertAuthAccounts(c.env.DB, [inventoryRecord]);
-
-    const probedRecord = await probeWhamUsage(
-      config.base_url,
-      config.token,
-      inventoryRecord,
-      config.timeout,
-      config.retries,
-      config.user_agent,
-      config.quota_disable_threshold
-    );
-
-    let workingRecord: Record<string, unknown> = { ...probedRecord, updated_at: new Date().toISOString() };
-    let action = 'none';
-    let actionResult: Record<string, unknown> | null = null;
-
-    const invalid = Number(workingRecord.is_invalid_401 ?? 0) === 1 || statusMessageIndicatesInvalid(workingRecord);
-    const quotaLimited = !invalid && (
-      Number(workingRecord.is_quota_limited ?? 0) === 1 || statusMessageIndicatesQuota(workingRecord)
-    );
-    const recovered = Number(workingRecord.is_recovered ?? 0) === 1;
-
-    if (invalid) {
-      if (config.delete_401 && Number(workingRecord.api_status_code ?? 0) === 401) {
-        action = 'delete_invalid';
-        actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
-        if (actionResult.ok) {
-          await deleteAccountFromDB(c.env.DB, name);
-          await logActivity(c.env.DB, 'maintain_single_account', `单账号维护删除401/失效账号: ${name}`, username);
-          return c.json({
-            ok: true,
-            name,
-            action,
-            action_result: actionResult,
-            removed: true,
-            account: null,
-          });
-        }
-        workingRecord.last_action = 'delete_invalid';
-        workingRecord.last_action_status = 'failed';
-        workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
-      } else if (Number(workingRecord.disabled ?? 0) !== 1) {
-        action = 'disable_invalid';
-        actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
-        workingRecord.last_action = 'disable_invalid';
-        workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
-        workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
-        if (actionResult.ok) {
-          workingRecord.disabled = 1;
-          workingRecord.managed_reason = 'invalid_disabled';
-          workingRecord.is_recovered = 0;
-        }
-      } else {
-        action = 'mark_invalid_disabled';
-        workingRecord.disabled = 1;
-        workingRecord.managed_reason = 'invalid_disabled';
-        workingRecord.is_recovered = 0;
-        workingRecord.last_action = 'mark_invalid_disabled';
-        workingRecord.last_action_status = 'success';
-        workingRecord.last_action_error = null;
-      }
-    } else if (quotaLimited) {
-      if (config.quota_action === 'delete') {
-        action = 'delete_quota';
-        actionResult = await deleteAccount(config.base_url, config.token, name, config.timeout, config.delete_retries) as unknown as Record<string, unknown>;
-        if (actionResult.ok) {
-          await deleteAccountFromDB(c.env.DB, name);
-          await logActivity(c.env.DB, 'maintain_single_account', `单账号维护删除限额账号: ${name}`, username);
-          return c.json({
-            ok: true,
-            name,
-            action,
-            action_result: actionResult,
-            removed: true,
-            account: null,
-          });
-        }
-        workingRecord.last_action = 'delete_quota';
-        workingRecord.last_action_status = 'failed';
-        workingRecord.last_action_error = String(actionResult.error ?? '删除失败');
-      } else if (Number(workingRecord.disabled ?? 0) !== 1) {
-        action = 'disable_quota';
-        actionResult = await setAccountDisabled(config.base_url, config.token, name, true, config.timeout) as unknown as Record<string, unknown>;
-        workingRecord.last_action = 'disable_quota';
-        workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
-        workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '禁用失败');
-        if (actionResult.ok) {
-          workingRecord.disabled = 1;
-          workingRecord.managed_reason = 'quota_disabled';
-          workingRecord.is_recovered = 0;
-        }
-      } else {
-        action = 'mark_quota_disabled';
-        workingRecord.disabled = 1;
-        workingRecord.managed_reason = 'quota_disabled';
-        workingRecord.is_recovered = 0;
-        workingRecord.last_action = 'mark_quota_disabled';
-        workingRecord.last_action_status = 'success';
-        workingRecord.last_action_error = null;
-      }
-    } else if (
-      recovered &&
-      config.auto_reenable &&
-      Number(workingRecord.disabled ?? 0) === 1 &&
-      (config.reenable_scope === 'signal' || String(workingRecord.managed_reason ?? '') === 'quota_disabled')
-    ) {
-      action = 'reenable';
-      actionResult = await setAccountDisabled(config.base_url, config.token, name, false, config.timeout) as unknown as Record<string, unknown>;
-      workingRecord.last_action = 'reenable_quota';
-      workingRecord.last_action_status = actionResult.ok ? 'success' : 'failed';
-      workingRecord.last_action_error = actionResult.ok ? null : String(actionResult.error ?? '启用失败');
-      if (actionResult.ok) {
-        workingRecord.disabled = 0;
-        workingRecord.managed_reason = null;
-        workingRecord.is_recovered = 0;
-        workingRecord.is_quota_limited = 0;
-        workingRecord.probe_error_kind = null;
-        workingRecord.probe_error_text = null;
-      }
-    } else {
-      action = 'refresh_only';
-      workingRecord.last_action = 'maintain_single_probe';
-      workingRecord.last_action_status = 'success';
-      workingRecord.last_action_error = null;
-    }
-
-    workingRecord.updated_at = new Date().toISOString();
-    await upsertAuthAccounts(c.env.DB, [workingRecord]);
-
-    const actionSummary = actionResult
-      ? ` | 动作=${action} | 结果=${actionResult.ok ? '成功' : '失败'}${actionResult.error ? ` | 错误=${String(actionResult.error)}` : ''}`
-      : ` | 动作=${action}`;
-    await logActivity(
-      c.env.DB,
-      'maintain_single_account',
-      `单账号维护: ${name} | invalid=${invalid ? 1 : 0} | quota=${quotaLimited ? 1 : 0} | recovered=${recovered ? 1 : 0}${actionSummary}`,
-      username
-    );
-
-    return c.json({
-      ok: true,
-      name,
-      action,
-      action_result: actionResult,
-      removed: false,
-      account: workingRecord,
-    });
+    const result = await maintainAccountInternal(c.env.DB, config, username, name, existing, remoteItem ?? null);
+    return c.json(result, result.ok ? 200 : 404);
   } catch (error) {
     return c.json({ ok: false, error: String(error) }, 500);
   }

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { HonoEnv } from '../types';
 import { loginPage } from '../views/layout';
 import { APP_ICON_SVG } from '../views/icon';
+import { buildPwaManifest, buildServiceWorker, getPngIconBody, PWA_METADATA } from '../views/pwa';
 import {
   dashboardPage,
   accountsPage,
@@ -20,7 +21,44 @@ pages.get('/assets/app-icon.svg', (c) => new Response(APP_ICON_SVG, {
     'Cache-Control': 'public, max-age=86400',
   },
 }));
-pages.get('/favicon.ico', (c) => c.redirect('/assets/app-icon.svg', 302));
+
+pages.get('/assets/app-icon-192.png', (c) => new Response(getPngIconBody(192), {
+  headers: {
+    'Content-Type': 'image/png',
+    'Cache-Control': 'public, max-age=86400',
+  },
+}));
+
+pages.get('/assets/app-icon-512.png', (c) => new Response(getPngIconBody(512), {
+  headers: {
+    'Content-Type': 'image/png',
+    'Cache-Control': 'public, max-age=86400',
+  },
+}));
+
+pages.get('/apple-touch-icon.png', (c) => new Response(getPngIconBody(180), {
+  headers: {
+    'Content-Type': 'image/png',
+    'Cache-Control': 'public, max-age=86400',
+  },
+}));
+
+pages.get('/manifest.webmanifest', (c) => new Response(buildPwaManifest(), {
+  headers: {
+    'Content-Type': 'application/manifest+json; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+  },
+}));
+
+pages.get('/sw.js', (c) => new Response(buildServiceWorker(), {
+  headers: {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'public, max-age=3600',
+    'Service-Worker-Allowed': '/',
+  },
+}));
+
+pages.get('/favicon.ico', (c) => c.redirect(PWA_METADATA.appleTouchIconHref, 302));
 pages.get('/login', (c) => c.html(loginPage()));
 pages.get('/', (c) => c.html(dashboardPage()));
 pages.get('/accounts', async (c) => {

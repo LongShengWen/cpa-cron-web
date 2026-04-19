@@ -267,8 +267,8 @@ npm run deploy
 下一次任务会自动从上次游标后继续探测，因此不是永远只扫前面一批账号。
 
 > 说明：  
-> 这层轮转探测在 Cloudflare Workers 和 Docker / Node.js 两种模式下都会生效。  
-> 其中 Docker / Node.js 模式不再受 Cloudflare Worker 的 subrequests 限制，但仍建议保留轮转策略，避免一次任务对 CPA 管理接口打出过高瞬时压力。
+> Cloudflare Workers 模式下，扫描 / 维护都会按上面的轮转策略执行。  
+> Docker / Node.js 模式下，扫描和维护都会先同步远程 CPA 源，再在单次任务内尽量做全量探测 / 全量处理，不再沿用这里的轮转上限。
 
 ### 账号状态原因说明
 

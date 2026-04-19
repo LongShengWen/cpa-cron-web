@@ -115,6 +115,134 @@ function renderAccountStatusBadge(row: Record<string, unknown>): string {
   return '<span class="badge badge-success">有效</span>';
 }
 
+function getAccountStateTone(row: Record<string, unknown>): 'success' | 'danger' | 'warning' | 'info' | 'dim' {
+  if (Number(row.disabled || 0) === 1 && Number(row.is_invalid_401 || 0) === 1) return 'danger';
+  if (Number(row.is_invalid_401 || 0) === 1) return 'danger';
+  if (Number(row.disabled || 0) === 1 && Number(row.is_quota_limited || 0) === 1) return 'warning';
+  if (Number(row.is_quota_limited || 0) === 1) return 'warning';
+  if (Number(row.disabled || 0) === 1 && Number(row.is_recovered || 0) === 1) return 'info';
+  if (Number(row.is_recovered || 0) === 1) return 'info';
+  if (Number(row.disabled || 0) === 1) return 'dim';
+  if (row.probe_error_kind) return 'warning';
+  return 'success';
+}
+
+function getQuotaPercent(
+  totalValue: unknown,
+  remainingValue: unknown,
+  usedValue: unknown,
+  ratioValue: unknown
+): number | null {
+  const total = parseOptionalNumber(totalValue);
+  let remaining = parseOptionalNumber(remainingValue);
+  let used = parseOptionalNumber(usedValue);
+  const ratio = parseOptionalNumber(ratioValue);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  if (total != null && total > 0 && remaining != null) {
+    return Math.max(0, Math.min(100, Math.round((remaining / total) * 100)));
+  }
+  if (ratio != null) {
+    return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  }
+  return null;
+}
+
+function getQuotaTone(percent: number | null, limitReached: boolean): 'success' | 'info' | 'warning' | 'danger' | 'dim' {
+  if (limitReached) return 'danger';
+  if (percent == null) return 'dim';
+  if (percent <= 10) return 'danger';
+  if (percent <= 30) return 'warning';
+  if (percent <= 60) return 'info';
+  return 'success';
+}
+
+function formatRelativeTimeText(value: unknown): string {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  if (!raw) return '-';
+  let date: Date;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+    date = new Date(raw.replace(' ', 'T') + 'Z');
+  } else {
+    date = new Date(raw);
+  }
+  if (Number.isNaN(date.getTime())) return '-';
+  const diffSeconds = Math.round((Date.now() - date.getTime()) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 60) return diffSeconds >= 0 ? '刚刚' : '即将';
+  const diffMinutes = Math.round(absSeconds / 60);
+  if (diffMinutes < 60) return diffSeconds >= 0 ? `${diffMinutes} 分钟前` : `${diffMinutes} 分钟后`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return diffSeconds >= 0 ? `${diffHours} 小时前` : `${diffHours} 小时后`;
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays < 30) return diffSeconds >= 0 ? `${diffDays} 天前` : `${diffDays} 天后`;
+  const diffMonths = Math.round(diffDays / 30);
+  if (diffMonths < 12) return diffSeconds >= 0 ? `${diffMonths} 个月前` : `${diffMonths} 个月后`;
+  const diffYears = Math.round(diffDays / 365);
+  return diffSeconds >= 0 ? `${diffYears} 年前` : `${diffYears} 年后`;
+}
+
+function renderAccountUpdatedCell(value: unknown): string {
+  const absolute = formatChinaTimeText(value);
+  const relative = formatRelativeTimeText(value);
+  return `
+<div class="account-updated-stack">
+  <span class="account-updated-absolute">${absolute}</span>
+  <span class="account-updated-relative">${relative}</span>
+</div>`.trim();
+}
+
+function renderAccountDetails(row: Record<string, unknown>): string {
+  const details: Array<{ label: string; value: string }> = [];
+  const stateReason = getAccountStatusReason(row) || '当前状态正常';
+  const managedReason = humanizeManagedReason(row.managed_reason);
+  const probeError = humanizeProbeError(row.probe_error_kind, row.probe_error_text);
+  const lastActionError = String(row.last_action_error ?? '').trim();
+  const lastProbedAt = String(row.last_probed_at ?? '').trim();
+  const weeklyReset = formatEpochSecondsText(row.usage_reset_at);
+  const sparkReset = formatEpochSecondsText(row.usage_spark_reset_at);
+
+  if (String(row.name ?? '').trim()) details.push({ label: '账号名', value: String(row.name).trim() });
+  details.push({ label: '状态说明', value: stateReason });
+  if (managedReason) details.push({ label: '系统处理原因', value: managedReason });
+  if (probeError) details.push({ label: '探测异常', value: probeError });
+  if (lastActionError) details.push({ label: '最近操作错误', value: lastActionError });
+  if (lastProbedAt) details.push({ label: '最近探测', value: `${formatChinaTimeText(lastProbedAt)}（${formatRelativeTimeText(lastProbedAt)}）` });
+  if (weeklyReset !== '-') details.push({ label: '周额度重置', value: weeklyReset });
+  if (sparkReset !== '-') details.push({ label: '代码审查额度重置', value: sparkReset });
+
+  if (!details.length) return '';
+
+  return `
+<details class="account-card-details">
+  <summary><span class="material-icons">expand_more</span><span>展开详情</span></summary>
+  <div class="account-card-details-body">
+    ${details.map((item) => `
+      <div class="account-detail-item">
+        <span class="account-detail-label">${escapeHtmlAttr(item.label)}</span>
+        <span class="account-detail-value">${escapeHtmlAttr(item.value)}</span>
+      </div>
+    `.trim()).join('')}
+  </div>
+</details>`.trim();
+}
+
+function renderAccountsSortHeader(label: string, sortKey: string): string {
+  return `
+<button
+  type="button"
+  data-account-sort="${escapeHtmlAttr(sortKey)}"
+  onclick="sortByColumn('${escapeHtmlAttr(sortKey)}')"
+  style="display:inline-flex;align-items:center;gap:4px;background:none;border:none;padding:0;color:inherit;font:inherit;cursor:pointer"
+>
+  <span>${label}</span>
+  <span data-sort-indicator style="font-size:12px;opacity:.8">↕</span>
+</button>`.trim();
+}
+
 function formatChinaTimeText(value: unknown): string {
   if (!value) return '-';
   const raw = String(value).trim();
@@ -138,21 +266,134 @@ function formatChinaTimeText(value: unknown): string {
   }).format(date).replace(/\//g, '-');
 }
 
+function parseOptionalNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatEpochSecondsText(value: unknown): string {
+  const num = parseOptionalNumber(value);
+  if (num == null || num <= 0) return '-';
+  return formatChinaTimeText(new Date(num * 1000).toISOString());
+}
+
+function formatQuotaValueText(
+  totalValue: unknown,
+  remainingValue: unknown,
+  usedValue: unknown,
+  ratioValue: unknown
+): string {
+  const total = parseOptionalNumber(totalValue);
+  let remaining = parseOptionalNumber(remainingValue);
+  let used = parseOptionalNumber(usedValue);
+  const ratio = parseOptionalNumber(ratioValue);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  if (total != null && total > 0) {
+    const percent = remaining != null
+      ? Math.max(0, Math.min(100, Math.round((remaining / total) * 100)))
+      : ratio != null
+        ? Math.max(0, Math.min(100, Math.round(ratio * 100)))
+        : null;
+    const numerator = remaining != null ? remaining : '?';
+    return `${numerator}/${total}${percent != null ? ` (${percent}%)` : ''}`;
+  }
+
+  if (ratio != null) {
+    const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+    return `${percent}%`;
+  }
+
+  return '-';
+}
+
+function renderQuotaCell(
+  row: Record<string, unknown>,
+  options: {
+    label: string;
+    totalKey: string;
+    remainingKey: string;
+    usedKey: string;
+    ratioKey: string;
+    resetAtKey: string;
+    limitReachedKey: string;
+    allowedKey: string;
+    windowSecondsKey: string;
+  }
+): string {
+  const total = parseOptionalNumber(row[options.totalKey]);
+  let remaining = parseOptionalNumber(row[options.remainingKey]);
+  let used = parseOptionalNumber(row[options.usedKey]);
+  const ratio = parseOptionalNumber(row[options.ratioKey]);
+  const resetAt = parseOptionalNumber(row[options.resetAtKey]);
+  const limitReached = Number(row[options.limitReachedKey] ?? 0) === 1;
+  const allowed = row[options.allowedKey] == null ? null : Number(row[options.allowedKey]) === 1;
+  const windowSeconds = parseOptionalNumber(row[options.windowSecondsKey]);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  const text = formatQuotaValueText(total, remaining, used, ratio);
+  if (text === '-') return '<span style="color:var(--text-dim)">-</span>';
+
+  const percent = getQuotaPercent(total, remaining, used, ratio);
+  const tone = getQuotaTone(percent, limitReached);
+  const tooltipLines = [options.label];
+  if (total != null) tooltipLines.push(`总额度: ${total}`);
+  if (remaining != null) tooltipLines.push(`剩余额度: ${remaining}`);
+  if (used != null) tooltipLines.push(`已用额度: ${used}`);
+  if (ratio != null) tooltipLines.push(`剩余比例: ${Math.max(0, Math.min(100, Math.round(ratio * 100)))}%`);
+  if (windowSeconds != null && windowSeconds > 0) tooltipLines.push(`窗口周期: ${windowSeconds} 秒`);
+  if (resetAt != null && resetAt > 0) tooltipLines.push(`重置时间: ${formatEpochSecondsText(resetAt)}`);
+  if (limitReached) tooltipLines.push('当前已触发限额');
+  if (allowed === false) tooltipLines.push('当前接口返回 allowed = false');
+
+  const tooltip = escapeHtmlAttr(tooltipLines.join('\n'));
+  const resetText = resetAt != null && resetAt > 0 ? formatEpochSecondsText(resetAt) : '未返回重置时间';
+  const percentText = percent != null ? `${percent}%` : '--';
+
+  return `
+<div class="quota-card quota-card-${tone} app-tooltip-anchor" data-tooltip="${tooltip}">
+  <div class="quota-card-head">
+    <span class="quota-card-value">${text}</span>
+    <span class="quota-card-percent">${percentText}</span>
+  </div>
+  ${percent != null ? `<div class="quota-progress"><span style="width:${percent}%"></span></div>` : ''}
+  <span class="quota-card-reset">${resetText.startsWith('未返回') ? resetText : `重置 ${resetText}`}</span>
+</div>`.trim();
+}
+
 export function dashboardPage(): string {
   return htmlLayout('仪表盘', `
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Dashboard overview</span>
+    <h3>集中查看账号池健康度、最近扫描结果与定时任务状态</h3>
+    <p>现在的首页更偏向 PWA 小屏使用：信息分组更清晰、卡片间距更接近原生应用、最近扫描与 Cron 结果也更适合在手机上快速浏览。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">space_dashboard</span>首页总览</span>
+    <span class="hero-chip"><span class="material-icons">task_alt</span>扫描结果</span>
+    <span class="hero-chip"><span class="material-icons">schedule</span>Cron 运行状态</span>
+    <span class="hero-chip"><span class="material-icons">receipt_long</span>最近活动</span>
+  </div>
+</div>
 <div id="statsContainer"><div class="spinner" style="margin:40px auto;display:block"></div></div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px">
+<div class="page-grid page-grid-2 section-stack">
   <div class="table-wrapper">
     <div class="table-toolbar"><strong>最近扫描</strong></div>
-    <div id="lastScan" style="padding:16px"><span class="text-dim">加载中...</span></div>
+    <div id="lastScan" class="dashboard-section-body"><span class="text-dim">加载中...</span></div>
   </div>
   <div class="table-wrapper">
     <div class="table-toolbar"><strong>Cron 状态</strong></div>
-    <div id="cronStatus" style="padding:16px"><span class="text-dim">加载中...</span></div>
+    <div id="cronStatus" class="dashboard-section-body"><span class="text-dim">加载中...</span></div>
   </div>
 </div>
-<div style="display:grid;grid-template-columns:1fr;gap:24px;margin-top:24px">
-  <div class="table-wrapper">
+<div class="section-stack">
+  <div class="table-wrapper responsive-table">
     <div class="table-toolbar"><strong>最近操作</strong></div>
     <div id="recentActivity" style="padding:0">
       <table><thead><tr><th>操作</th><th>详情</th><th>用户</th><th>时间</th></tr></thead><tbody id="activityBody"></tbody></table>
@@ -161,9 +402,38 @@ export function dashboardPage(): string {
 </div>
 <script>
 (async () => {
+  const statsContainer = document.getElementById('statsContainer');
+  const lastScanEl = document.getElementById('lastScan');
+  const cronStatusEl = document.getElementById('cronStatus');
+  const tbody = document.getElementById('activityBody');
+
+  const showDashboardError = function(message) {
+    const safeMessage = String(message || '未知错误');
+    if (statsContainer) {
+      statsContainer.innerHTML = '<div class="alert alert-danger">仪表盘数据加载失败：' + safeMessage + '</div>';
+    }
+    if (lastScanEl) {
+      lastScanEl.innerHTML = '<div class="empty"><span class="material-icons">error</span><p>最近扫描数据加载失败</p></div>';
+    }
+    if (cronStatusEl) {
+      cronStatusEl.innerHTML = '<div class="empty"><span class="material-icons">error</span><p>Cron 状态加载失败</p></div>';
+    }
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--danger)">接口异常：' + safeMessage + '</td></tr>';
+    }
+  };
+
   const data = await api('/dashboard');
-  if (!data) return;
-  document.getElementById('statsContainer').innerHTML = \`
+  if (!data) {
+    showDashboardError('未收到接口响应');
+    return;
+  }
+  if (data.ok === false && data.error) {
+    showDashboardError(data.error + (data.status ? (' (HTTP ' + data.status + ')') : ''));
+    return;
+  }
+
+  statsContainer.innerHTML = \`
     <div class="stats-grid">
       <div class="stat-card"><div class="label">总账号数</div><div class="value">\${data.total_accounts}</div></div>
       <div class="stat-card"><div class="label">有效账号</div><div class="value success">\${data.active_accounts}</div></div>
@@ -176,7 +446,7 @@ export function dashboardPage(): string {
   \`;
   if (data.last_scan) {
     const s = data.last_scan;
-    document.getElementById('lastScan').innerHTML = \`
+    lastScanEl.innerHTML = \`
       <p style="font-size:13px;color:var(--text-dim)">
         运行ID: \${s.run_id} | 模式: \${s.mode} | 状态: <span class="badge \${s.status==='success'?'badge-success':'badge-danger'}">\${s.status}</span><br>
         总文件: \${s.total_files} | 过滤: \${s.filtered_files} | 探测: \${s.probed_files}<br>
@@ -185,7 +455,7 @@ export function dashboardPage(): string {
       </p>
     \`;
   } else {
-    document.getElementById('lastScan').innerHTML = '<div class="empty"><span class="material-icons">info</span><p>尚无扫描记录</p></div>';
+    lastScanEl.innerHTML = '<div class="empty"><span class="material-icons">info</span><p>尚无扫描记录</p></div>';
   }
 
   function cronToHuman(expr) {
@@ -226,7 +496,7 @@ export function dashboardPage(): string {
       : cronState === 'running'
         ? 'badge-info'
         : 'badge-warning';
-  document.getElementById('cronStatus').innerHTML = \`
+  cronStatusEl.innerHTML = \`
     <div style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:var(--text-dim)">
       <div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
@@ -251,10 +521,14 @@ export function dashboardPage(): string {
     </div>
   \`;
 
-  const tbody = document.getElementById('activityBody');
   if (data.recent_activity?.length) {
     tbody.innerHTML = data.recent_activity.map(a => \`
-      <tr><td><span class="badge badge-info">\${a.action}</span></td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${a.detail||'-'}</td><td>\${a.username||'-'}</td><td style="white-space:nowrap">\${window.formatChinaTime(a.created_at)}</td></tr>
+      <tr>
+        <td data-label="操作"><span class="badge badge-info">\${a.action}</span></td>
+        <td data-label="详情" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${a.detail||'-'}</td>
+        <td data-label="用户">\${a.username||'-'}</td>
+        <td data-label="时间" style="white-space:nowrap">\${window.formatChinaTime(a.created_at)}</td>
+      </tr>
     \`).join('');
   } else {
     tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-dim)">暂无记录</td></tr>';
@@ -267,61 +541,158 @@ export function dashboardPage(): string {
 export function accountsPage(initialData?: AccountsInitialData): string {
   const initialRows = initialData?.rows || [];
   const initialTotal = initialData?.total || 0;
+  const hasInitialRows = initialRows.length > 0;
   const initialTbody = initialRows.length
     ? initialRows.map((r) => `
-    <tr>
-      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${String(r.email || r.account || '-')}</td>
-      <td>${String(r.provider || '-')}</td>
-      <td>${renderAccountStatusBadge(r)}</td>
-      <td>${r.api_status_code != null ? String(r.api_status_code) : '-'}</td>
-      <td style="white-space:nowrap;font-size:12px">${formatChinaTimeText(r.updated_at)}</td>
-      <td>
-        <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'${encodeURIComponent(String(r.name || ''))}')">维护</button>
-        <button class="btn btn-sm ${Number(r.disabled || 0) === 1 ? 'btn-primary' : 'btn-outline'}" onclick="toggleAccount('${encodeURIComponent(String(r.name || ''))}',${Number(r.disabled || 0) !== 1})">${Number(r.disabled || 0) === 1 ? '启用' : '禁用'}</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteAcc('${encodeURIComponent(String(r.name || ''))}')">删除</button>
+    <tr class="account-row account-state-${getAccountStateTone(r)}">
+      <td data-label="选择" class="account-cell-select"><input type="checkbox" class="account-row-checkbox" value="${escapeHtmlAttr(String(r.name || ''))}" onchange="toggleAccountSelection(this)"></td>
+      <td data-label="邮箱" class="account-cell-email"><div class="account-email-text">${String(r.email || r.account || '-')}</div></td>
+      <td data-label="Provider" class="account-cell-provider"><span class="account-provider-chip">${String(r.provider || '-')}</span></td>
+      <td data-label="状态" class="account-cell-status">${renderAccountStatusBadge(r)}</td>
+      <td data-label="周额度" class="account-cell-quota">${renderQuotaCell(r, {
+        label: '周额度',
+        totalKey: 'usage_total',
+        remainingKey: 'usage_remaining',
+        usedKey: 'usage_used',
+        ratioKey: 'usage_remaining_ratio',
+        resetAtKey: 'usage_reset_at',
+        limitReachedKey: 'usage_limit_reached',
+        allowedKey: 'usage_allowed',
+        windowSecondsKey: 'usage_limit_window_seconds',
+      })}</td>
+      <td data-label="代码审查周额度" class="account-cell-spark">${renderQuotaCell(r, {
+        label: '代码审查周额度',
+        totalKey: 'usage_spark_total',
+        remainingKey: 'usage_spark_remaining',
+        usedKey: 'usage_spark_used',
+        ratioKey: 'usage_spark_remaining_ratio',
+        resetAtKey: 'usage_spark_reset_at',
+        limitReachedKey: 'usage_spark_limit_reached',
+        allowedKey: 'usage_spark_allowed',
+        windowSecondsKey: 'usage_spark_limit_window_seconds',
+      })}</td>
+      <td data-label="API" class="account-cell-api"><span class="account-api-chip">${r.api_status_code != null ? String(r.api_status_code) : '-'}</span></td>
+      <td data-label="更新时间" class="account-cell-updated">${renderAccountUpdatedCell(r.updated_at)}</td>
+      <td data-label="操作" class="account-cell-actions">
+        <div class="action-group">
+          <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'${encodeURIComponent(String(r.name || ''))}')">维护</button>
+          <button class="btn btn-sm ${Number(r.disabled || 0) === 1 ? 'btn-primary' : 'btn-outline'}" onclick="toggleAccount('${encodeURIComponent(String(r.name || ''))}',${Number(r.disabled || 0) !== 1})">${Number(r.disabled || 0) === 1 ? '启用' : '禁用'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteAcc('${encodeURIComponent(String(r.name || ''))}')">删除</button>
+        </div>
+        ${renderAccountDetails(r)}
       </td>
     </tr>`).join('')
-    : '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">暂无数据</td></tr>';
+    : '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">暂无数据</td></tr>';
   return htmlLayout('账号管理', `
 <div id="accountsAlert" style="display:none" class="alert alert-info" style="margin-bottom:16px"></div>
-<div class="table-wrapper" style="margin-bottom:16px">
-  <div style="padding:14px 16px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--text-dim)">
-    <span id="accountsFreshness">数据来源时间: 加载中...</span>
-    <span id="accountsProbeTime">最近探测: -</span>
-    <span id="accountsTaskState">当前任务: 空闲</span>
-    <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
-    <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 维护</button>
-    <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
-    <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止任务</button>
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Accounts workspace</span>
+    <h3>在手机端也能顺手完成筛选、维护、批量启停与问题定位</h3>
+    <p>账号页已经进一步调整为更接近原生 App 的“状态卡 + 快捷动作 + 筛选面板”结构，小屏下不再像桌面表格直接缩进手机里。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">filter_list</span>快速筛选</span>
+    <span class="hero-chip"><span class="material-icons">checklist</span>批量操作</span>
+    <span class="hero-chip"><span class="material-icons">health_and_safety</span>状态监控</span>
+    <span class="hero-chip"><span class="material-icons">bolt</span>快捷维护</span>
   </div>
 </div>
-<div class="table-wrapper">
-  <div class="table-toolbar">
-    <input type="text" id="searchInput" placeholder="搜索账号名/邮箱..." style="width:240px" oninput="debounceSearch()">
-    <select id="statusFilter" onchange="loadAccounts()" style="width:150px">
-      <option value="">全部状态</option>
-      <option value="active">有效</option>
-      <option value="disabled">已禁用</option>
-      <option value="invalid_401">401失效</option>
-      <option value="quota_limited">配额耗尽</option>
-      <option value="recovered">已恢复</option>
-      <option value="probe_error">探测异常</option>
-    </select>
-    <select id="sortSelect" onchange="loadAccounts()" style="width:140px">
-      <option value="updated_at">更新时间</option>
-      <option value="name">名称</option>
-      <option value="email">邮箱</option>
-      <option value="last_probed_at">探测时间</option>
-    </select>
-    <button class="btn btn-outline btn-sm" onclick="toggleOrder()">
-      <span class="material-icons" style="font-size:16px" id="orderIcon">arrow_downward</span>
-    </button>
-    <span id="totalCount" style="font-size:13px;color:var(--text-dim);margin-left:auto">共 ${initialTotal} 条</span>
+<div class="table-wrapper accounts-meta-panel" style="margin-bottom:16px">
+  <div class="accounts-meta-grid">
+    <div>
+      <div class="toolbar-section-tag" style="margin-bottom:10px">实时状态</div>
+      <div class="accounts-status-grid">
+        <div class="status-mini-card">
+          <span class="status-mini-label">数据来源时间</span>
+          <span class="status-mini-value" id="accountsFreshness">加载中...</span>
+          <span class="status-mini-note">当前列表显示的数据刷新时间</span>
+        </div>
+        <div class="status-mini-card">
+          <span class="status-mini-label">最近探测</span>
+          <span class="status-mini-value" id="accountsProbeTime">-</span>
+          <span class="status-mini-note">最近一次账号探测结果写入时间</span>
+        </div>
+        <div class="status-mini-card">
+          <span class="status-mini-label">当前任务</span>
+          <span class="status-mini-value" id="accountsTaskState">空闲</span>
+          <span class="status-mini-note">扫描 / 维护任务运行状态</span>
+        </div>
+      </div>
+    </div>
+    <div class="quick-actions-panel">
+      <div class="quick-actions-title"><span class="material-icons">flash_on</span><span>快捷操作</span></div>
+      <button class="btn btn-primary btn-sm" onclick="quickScan()" id="quickScanBtn"><span class="material-icons" style="font-size:16px">sync</span> 立即扫描</button>
+      <button class="btn btn-warning btn-sm" onclick="quickMaintain()" id="quickMaintainBtn"><span class="material-icons" style="font-size:16px">build</span> 立即维护</button>
+      <button class="btn btn-warning btn-sm" onclick="quickScanMaintain()" id="quickScanMaintainBtn"><span class="material-icons" style="font-size:16px">manage_search</span> 扫描并维护</button>
+      <button class="btn btn-outline btn-sm" onclick="cancelQuickTask()" id="quickTaskCancelBtn" style="display:none"><span class="material-icons" style="font-size:16px">stop_circle</span> 停止当前任务</button>
+      <div class="surface-note">建议在批量维护前先按状态筛选，避免在手机端误操作过多账号。</div>
+    </div>
+  </div>
+</div>
+<div class="table-wrapper responsive-table accounts-table-shell">
+  <div class="table-toolbar accounts-toolbar-panel">
+    <div class="accounts-toolbar-head">
+      <div class="accounts-toolbar-copy">
+        <span class="toolbar-section-tag">筛选与批量处理</span>
+        <div class="accounts-toolbar-title">账号列表视图</div>
+        <div class="accounts-toolbar-subtitle">支持按状态、排序和关键字快速过滤，批量操作按钮会根据你已选择的账号自动启用。</div>
+      </div>
+      <span id="totalCount" class="accounts-counter-pill">共 ${initialTotal} 条</span>
+    </div>
+    <div class="accounts-filter-grid">
+      <input type="text" id="searchInput" placeholder="搜索账号名 / 邮箱..." oninput="debounceSearch()">
+      <select id="statusFilter" onchange="loadAccounts()">
+        <option value="">全部状态</option>
+        <option value="active">有效</option>
+        <option value="disabled">已禁用</option>
+        <option value="invalid_401">401失效</option>
+        <option value="quota_limited">配额耗尽</option>
+        <option value="recovered">已恢复</option>
+        <option value="probe_error">探测异常</option>
+      </select>
+      <select id="sortSelect" onchange="loadAccounts()">
+        <option value="updated_at">更新时间</option>
+        <option value="name">名称</option>
+        <option value="email">邮箱</option>
+        <option value="provider">Provider</option>
+        <option value="status_sort">状态</option>
+        <option value="quota_sort">周额度</option>
+        <option value="code_review_quota_sort">代码审查周额度</option>
+        <option value="api_status_code">API</option>
+        <option value="last_probed_at">探测时间</option>
+      </select>
+      <button class="btn btn-outline btn-sm" onclick="toggleOrder()">
+        <span class="material-icons" style="font-size:16px" id="orderIcon">arrow_downward</span>
+        切换排序
+      </button>
+    </div>
+    <div class="accounts-batch-grid">
+      <span id="selectedCount" class="accounts-counter-pill">已选择 0 项</span>
+      <button class="btn btn-warning btn-sm" onclick="batchMaintain()" id="batchMaintainBtn" disabled>
+        <span class="material-icons" style="font-size:16px">build</span> 批量维护
+      </button>
+      <button class="btn btn-primary btn-sm" onclick="batchEnable()" id="batchEnableBtn" disabled>
+        <span class="material-icons" style="font-size:16px">check_circle</span> 批量启用
+      </button>
+      <button class="btn btn-danger btn-sm" onclick="batchDelete()" id="batchDeleteBtn" disabled>
+        <span class="material-icons" style="font-size:16px">delete</span> 批量删除
+      </button>
+      <span class="section-note">列表已针对手机端卡片化显示，继续保留桌面端排序表头与批量勾选逻辑。</span>
+    </div>
   </div>
   <div id="accountsTable">
-    <table>
+    <table class="accounts-table">
       <thead><tr>
-        <th>邮箱</th><th>Provider</th><th>状态</th><th>API</th><th>更新时间</th><th>操作</th>
+        <th><input type="checkbox" id="selectAllAccounts" onchange="toggleSelectAll(this)" title="全选当前页"></th>
+        <th>${renderAccountsSortHeader('邮箱', 'email')}</th>
+        <th>${renderAccountsSortHeader('Provider', 'provider')}</th>
+        <th>${renderAccountsSortHeader('状态', 'status_sort')}</th>
+        <th>${renderAccountsSortHeader('周额度', 'quota_sort')}</th>
+        <th>${renderAccountsSortHeader('代码审查周额度', 'code_review_quota_sort')}</th>
+        <th>${renderAccountsSortHeader('API', 'api_status_code')}</th>
+        <th>${renderAccountsSortHeader('更新时间', 'updated_at')}</th>
+        <th>操作</th>
       </tr></thead>
       <tbody id="accountsBody">${initialTbody}</tbody>
     </table>
@@ -339,6 +710,80 @@ let searchTimer;
 let accountMetaTimer = null;
 let currentQuickTaskId = null;
 let currentQuickTaskType = null;
+const selectedAccountNames = new Set();
+let currentPageAccountNames = [];
+
+function sortSelectValue() {
+  const sortSelect = document.getElementById('sortSelect');
+  return (sortSelect && sortSelect.value) ? sortSelect.value : 'updated_at';
+}
+
+function syncSortUi() {
+  const sortSelect = document.getElementById('sortSelect');
+  const currentSort = sortSelectValue();
+  const orderIcon = document.getElementById('orderIcon');
+
+  if (sortSelect && sortSelect.querySelector('option[value="' + currentSort + '"]')) {
+    sortSelect.value = currentSort;
+  }
+  if (orderIcon) {
+    orderIcon.textContent = sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward';
+  }
+
+  document.querySelectorAll('[data-account-sort]').forEach(function(el) {
+    const key = el.getAttribute('data-account-sort');
+    const indicator = el.querySelector('[data-sort-indicator]');
+    const active = key === currentSort;
+    el.style.color = active ? 'var(--primary)' : 'var(--text-dim)';
+    if (indicator) indicator.textContent = active ? (sortOrder === 'desc' ? '↓' : '↑') : '↕';
+  });
+}
+
+function syncBatchSelectionUi() {
+  const count = selectedAccountNames.size;
+  const selectedCount = document.getElementById('selectedCount');
+  const batchMaintainBtn = document.getElementById('batchMaintainBtn');
+  const batchEnableBtn = document.getElementById('batchEnableBtn');
+  const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+  const selectAll = document.getElementById('selectAllAccounts');
+  const pageSelectedCount = currentPageAccountNames.filter(function(name) { return selectedAccountNames.has(name); }).length;
+
+  if (selectedCount) selectedCount.textContent = '已选择 ' + count + ' 项';
+  if (batchMaintainBtn) batchMaintainBtn.disabled = count === 0;
+  if (batchEnableBtn) batchEnableBtn.disabled = count === 0;
+  if (batchDeleteBtn) batchDeleteBtn.disabled = count === 0;
+  if (selectAll) {
+    selectAll.checked = currentPageAccountNames.length > 0 && pageSelectedCount === currentPageAccountNames.length;
+    selectAll.indeterminate = pageSelectedCount > 0 && pageSelectedCount < currentPageAccountNames.length;
+  }
+
+  document.querySelectorAll('.account-row-checkbox').forEach(function(el) {
+    const input = el;
+    input.checked = selectedAccountNames.has(input.value);
+  });
+}
+
+function toggleAccountSelection(checkbox) {
+  const name = String(checkbox.value || '');
+  if (!name) return;
+  if (checkbox.checked) selectedAccountNames.add(name);
+  else selectedAccountNames.delete(name);
+  syncBatchSelectionUi();
+}
+
+function toggleSelectAll(checkbox) {
+  if (!Array.isArray(currentPageAccountNames) || currentPageAccountNames.length === 0) return;
+  if (checkbox.checked) {
+    currentPageAccountNames.forEach(function(name) { selectedAccountNames.add(name); });
+  } else {
+    currentPageAccountNames.forEach(function(name) { selectedAccountNames.delete(name); });
+  }
+  syncBatchSelectionUi();
+}
+
+function getSelectedNames() {
+  return Array.from(selectedAccountNames.values());
+}
 
 function syncPager() {
   document.getElementById('totalCount').textContent = '共 ' + totalRows + ' 条';
@@ -351,20 +796,200 @@ function fmtTime(value) {
   return window.formatChinaTime(value);
 }
 
+function fmtEpochSeconds(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '-';
+  return window.formatChinaTime(new Date(num * 1000).toISOString());
+}
+
+function numOrNull(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function quotaPercent(totalValue, remainingValue, usedValue, ratioValue) {
+  const total = numOrNull(totalValue);
+  let remaining = numOrNull(remainingValue);
+  let used = numOrNull(usedValue);
+  const ratio = numOrNull(ratioValue);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  if (total != null && total > 0 && remaining != null) {
+    return Math.max(0, Math.min(100, Math.round((remaining / total) * 100)));
+  }
+  if (ratio != null) {
+    return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  }
+  return null;
+}
+
+function quotaTone(percent, limitReached) {
+  if (limitReached) return 'danger';
+  if (percent == null) return 'dim';
+  if (percent <= 10) return 'danger';
+  if (percent <= 30) return 'warning';
+  if (percent <= 60) return 'info';
+  return 'success';
+}
+
+function formatRelativeTime(value) {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  if (!raw) return '-';
+  let date = null;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+    date = new Date(raw.replace(' ', 'T') + 'Z');
+  } else {
+    date = new Date(raw);
+  }
+  if (!date || Number.isNaN(date.getTime())) return '-';
+  const diffSeconds = Math.round((Date.now() - date.getTime()) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 60) return diffSeconds >= 0 ? '刚刚' : '即将';
+  const diffMinutes = Math.round(absSeconds / 60);
+  if (diffMinutes < 60) return diffSeconds >= 0 ? (diffMinutes + ' 分钟前') : (diffMinutes + ' 分钟后');
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return diffSeconds >= 0 ? (diffHours + ' 小时前') : (diffHours + ' 小时后');
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays < 30) return diffSeconds >= 0 ? (diffDays + ' 天前') : (diffDays + ' 天后');
+  const diffMonths = Math.round(diffDays / 30);
+  if (diffMonths < 12) return diffSeconds >= 0 ? (diffMonths + ' 个月前') : (diffMonths + ' 个月后');
+  const diffYears = Math.round(diffDays / 365);
+  return diffSeconds >= 0 ? (diffYears + ' 年前') : (diffYears + ' 年后');
+}
+
+function accountUpdatedCell(value) {
+  return '<div class="account-updated-stack">' +
+    '<span class="account-updated-absolute">' + fmtTime(value) + '</span>' +
+    '<span class="account-updated-relative">' + formatRelativeTime(value) + '</span>' +
+    '</div>';
+}
+
+function quotaValueText(totalValue, remainingValue, usedValue, ratioValue) {
+  const total = numOrNull(totalValue);
+  let remaining = numOrNull(remainingValue);
+  let used = numOrNull(usedValue);
+  const ratio = numOrNull(ratioValue);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  if (total != null && total > 0) {
+    const percent = remaining != null
+      ? Math.max(0, Math.min(100, Math.round((remaining / total) * 100)))
+      : ratio != null
+        ? Math.max(0, Math.min(100, Math.round(ratio * 100)))
+        : null;
+    const numerator = remaining != null ? remaining : '?';
+    return String(numerator) + '/' + String(total) + (percent != null ? (' (' + percent + '%)') : '');
+  }
+
+  if (ratio != null) {
+    return String(Math.max(0, Math.min(100, Math.round(ratio * 100)))) + '%';
+  }
+
+  return '-';
+}
+
+function quotaCell(row, options) {
+  const total = numOrNull(row[options.totalKey]);
+  let remaining = numOrNull(row[options.remainingKey]);
+  let used = numOrNull(row[options.usedKey]);
+  const ratio = numOrNull(row[options.ratioKey]);
+  const resetAt = numOrNull(row[options.resetAtKey]);
+  const limitReached = Number(row[options.limitReachedKey] || 0) === 1;
+  const allowed = row[options.allowedKey] == null ? null : Number(row[options.allowedKey]) === 1;
+  const windowSeconds = numOrNull(row[options.windowSecondsKey]);
+
+  if (remaining == null && total != null && used != null) remaining = Math.max(0, total - used);
+  if (used == null && total != null && remaining != null) used = Math.max(0, total - remaining);
+
+  const text = quotaValueText(total, remaining, used, ratio);
+  if (text === '-') return '<span style="color:var(--text-dim)">-</span>';
+
+  const percent = quotaPercent(total, remaining, used, ratio);
+  const tone = quotaTone(percent, limitReached);
+  const lines = [options.label];
+  if (total != null) lines.push('总额度: ' + total);
+  if (remaining != null) lines.push('剩余额度: ' + remaining);
+  if (used != null) lines.push('已用额度: ' + used);
+  if (ratio != null) lines.push('剩余比例: ' + Math.max(0, Math.min(100, Math.round(ratio * 100))) + '%');
+  if (windowSeconds != null && windowSeconds > 0) lines.push('窗口周期: ' + windowSeconds + ' 秒');
+  if (resetAt != null && resetAt > 0) lines.push('重置时间: ' + fmtEpochSeconds(resetAt));
+  if (limitReached) lines.push('当前已触发限额');
+  if (allowed === false) lines.push('当前接口返回 allowed = false');
+
+  const tooltip = lines.join('\\n')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const resetText = resetAt != null && resetAt > 0 ? fmtEpochSeconds(resetAt) : '未返回重置时间';
+  const percentText = percent != null ? (percent + '%') : '--';
+
+  return '<div class="quota-card quota-card-' + tone + ' app-tooltip-anchor" data-tooltip="' + tooltip + '">' +
+    '<div class="quota-card-head">' +
+      '<span class="quota-card-value">' + text + '</span>' +
+      '<span class="quota-card-percent">' + percentText + '</span>' +
+    '</div>' +
+    (percent != null ? ('<div class="quota-progress"><span style="width:' + percent + '%"></span></div>') : '') +
+    '<span class="quota-card-reset">' + (resetText.indexOf('未返回') === 0 ? resetText : ('重置 ' + resetText)) + '</span>' +
+    '</div>';
+}
+
+function accountStateTone(row) {
+  if (row.disabled && row.is_invalid_401) return 'danger';
+  if (row.is_invalid_401) return 'danger';
+  if (row.disabled && row.is_quota_limited) return 'warning';
+  if (row.is_quota_limited) return 'warning';
+  if (row.disabled && row.is_recovered) return 'info';
+  if (row.is_recovered) return 'info';
+  if (row.disabled) return 'dim';
+  if (row.probe_error_kind) return 'warning';
+  return 'success';
+}
+
+function accountDetailsHtml(row) {
+  const details = [];
+  const stateReason = statusReason(row) || '当前状态正常';
+  const managedReason = humanizeManagedReason(row.managed_reason);
+  const probeError = humanizeProbeError(row.probe_error_kind, row.probe_error_text);
+  const lastActionError = String(row.last_action_error || '').trim();
+  const lastProbedAt = String(row.last_probed_at || '').trim();
+  const weeklyReset = fmtEpochSeconds(row.usage_reset_at);
+  const sparkReset = fmtEpochSeconds(row.usage_spark_reset_at);
+
+  if (String(row.name || '').trim()) details.push({ label: '账号名', value: String(row.name).trim() });
+  details.push({ label: '状态说明', value: stateReason });
+  if (managedReason) details.push({ label: '系统处理原因', value: managedReason });
+  if (probeError) details.push({ label: '探测异常', value: probeError });
+  if (lastActionError) details.push({ label: '最近操作错误', value: lastActionError });
+  if (lastProbedAt) details.push({ label: '最近探测', value: fmtTime(lastProbedAt) + '（' + formatRelativeTime(lastProbedAt) + '）' });
+  if (weeklyReset !== '-') details.push({ label: '周额度重置', value: weeklyReset });
+  if (sparkReset !== '-') details.push({ label: '代码审查额度重置', value: sparkReset });
+  if (!details.length) return '';
+
+  return '<details class="account-card-details">' +
+    '<summary><span class="material-icons">expand_more</span><span>展开详情</span></summary>' +
+    '<div class="account-card-details-body">' +
+      details.map(function(item) {
+        return '<div class="account-detail-item">' +
+          '<span class="account-detail-label">' + escapeAttr(item.label) + '</span>' +
+          '<span class="account-detail-value">' + escapeAttr(item.value) + '</span>' +
+          '</div>';
+      }).join('') +
+    '</div>' +
+  '</details>';
+}
+
 async function refreshAccountMeta() {
   const [dash, tasks, meta] = await Promise.all([api('/dashboard'), api('/tasks'), api('/accounts/meta')]);
   if (dash) {
     const lastScan = dash.last_scan;
     const freshness = lastScan ? (lastScan.finished_at || lastScan.started_at || '-') : '-';
     document.getElementById('accountsFreshness').textContent = '数据来源时间: ' + fmtTime(freshness);
-  }
-
-  const listReq = await api('/accounts?limit=1&sort=last_probed_at&order=desc');
-  if (listReq && listReq.rows && listReq.rows.length > 0) {
-    const row = listReq.rows[0];
-    document.getElementById('accountsProbeTime').textContent = '最近探测: ' + fmtTime(row.last_probed_at || row.updated_at || row.last_seen_at);
-  } else {
-    document.getElementById('accountsProbeTime').textContent = '最近探测: -';
   }
 
   if (tasks && Array.isArray(tasks) && tasks.length > 0) {
@@ -383,6 +1008,8 @@ async function refreshAccountMeta() {
   }
 
   if (meta) {
+    document.getElementById('accountsProbeTime').textContent = '最近探测: ' + fmtTime(meta.latest_probed_at || meta.latest_updated_at || '-');
+
     if (meta.cache_matches_current) {
       hideAlert();
       if (meta.cache_last_success_at) {
@@ -403,13 +1030,26 @@ async function refreshAccountMeta() {
   }
 
   if (accountMetaTimer) clearTimeout(accountMetaTimer);
-  accountMetaTimer = setTimeout(refreshAccountMeta, 5000);
+  accountMetaTimer = setTimeout(refreshAccountMeta, document.hidden ? 30000 : 15000);
 }
 
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(()=>{ currentPage=0; loadAccounts(); }, 300); }
 function toggleOrder() {
   sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
-  document.getElementById('orderIcon').textContent = sortOrder === 'desc' ? 'arrow_downward' : 'arrow_upward';
+  loadAccounts();
+}
+function sortByColumn(key) {
+  const currentSort = sortSelectValue();
+  const sortSelect = document.getElementById('sortSelect');
+  if (currentSort === key) {
+    sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+  } else {
+    if (sortSelect && sortSelect.querySelector('option[value="' + key + '"]')) {
+      sortSelect.value = key;
+    }
+    sortOrder = 'desc';
+  }
+  currentPage = 0;
   loadAccounts();
 }
 function changePage(dir) { currentPage = Math.max(0, currentPage + dir); loadAccounts(); }
@@ -479,31 +1119,139 @@ function statusBadge(row) {
 async function loadAccounts() {
   const filter = document.getElementById('searchInput').value;
   const status = document.getElementById('statusFilter').value;
-  const sort = document.getElementById('sortSelect').value;
+  const sort = sortSelectValue();
   const data = await api(\`/accounts?limit=\${pageSize}&offset=\${currentPage*pageSize}&filter=\${encodeURIComponent(filter)}&status=\${status}&sort=\${sort}&order=\${sortOrder}\`);
   if (!data) return;
   totalRows = data.total;
+  const maxPage = Math.max(0, Math.ceil(totalRows / pageSize) - 1);
+  if (currentPage > maxPage) {
+    currentPage = maxPage;
+    return loadAccounts();
+  }
   syncPager();
+  syncSortUi();
   const tbody = document.getElementById('accountsBody');
+  currentPageAccountNames = Array.isArray(data.rows) ? data.rows.map(function(r) { return String(r.name || ''); }).filter(Boolean) : [];
   if (!data.rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">暂无数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">暂无数据</td></tr>';
+    syncBatchSelectionUi();
     return;
   }
   tbody.innerHTML = data.rows.map(r => \`
-    <tr>
-      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">\${r.email||r.account||'-'}</td>
-      <td>\${r.provider||'-'}</td>
-      <td>\${statusBadge(r)}</td>
-      <td>\${r.api_status_code!=null?r.api_status_code:'-'}</td>
-      <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.updated_at)}</td>
-      <td>
-        <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'\${encodeURIComponent(r.name)}')">维护</button>
-        <button class="btn btn-sm \${r.disabled?'btn-primary':'btn-outline'}" onclick="toggleAccount('\${encodeURIComponent(r.name)}',\${!r.disabled})">\${r.disabled?'启用':'禁用'}</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteAcc('\${encodeURIComponent(r.name)}')">删除</button>
+    <tr class="account-row account-state-\${accountStateTone(r)}">
+      <td data-label="选择" class="account-cell-select"><input type="checkbox" class="account-row-checkbox" value="\${escapeAttr(r.name)}" onchange="toggleAccountSelection(this)"></td>
+      <td data-label="邮箱" class="account-cell-email"><div class="account-email-text">\${r.email||r.account||'-'}</div></td>
+      <td data-label="Provider" class="account-cell-provider"><span class="account-provider-chip">\${r.provider||'-'}</span></td>
+      <td data-label="状态" class="account-cell-status">\${statusBadge(r)}</td>
+      <td data-label="周额度" class="account-cell-quota">\${quotaCell(r, {
+        label: '周额度',
+        totalKey: 'usage_total',
+        remainingKey: 'usage_remaining',
+        usedKey: 'usage_used',
+        ratioKey: 'usage_remaining_ratio',
+        resetAtKey: 'usage_reset_at',
+        limitReachedKey: 'usage_limit_reached',
+        allowedKey: 'usage_allowed',
+        windowSecondsKey: 'usage_limit_window_seconds'
+      })}</td>
+      <td data-label="代码审查周额度" class="account-cell-spark">\${quotaCell(r, {
+        label: '代码审查周额度',
+        totalKey: 'usage_spark_total',
+        remainingKey: 'usage_spark_remaining',
+        usedKey: 'usage_spark_used',
+        ratioKey: 'usage_spark_remaining_ratio',
+        resetAtKey: 'usage_spark_reset_at',
+        limitReachedKey: 'usage_spark_limit_reached',
+        allowedKey: 'usage_spark_allowed',
+        windowSecondsKey: 'usage_spark_limit_window_seconds'
+      })}</td>
+      <td data-label="API" class="account-cell-api"><span class="account-api-chip">\${r.api_status_code!=null?r.api_status_code:'-'}</span></td>
+      <td data-label="更新时间" class="account-cell-updated">\${accountUpdatedCell(r.updated_at)}</td>
+      <td data-label="操作" class="account-cell-actions">
+        <div class="action-group">
+          <button class="btn btn-warning btn-sm" onclick="maintainAccount(this,'\${encodeURIComponent(r.name)}')">维护</button>
+          <button class="btn btn-sm \${r.disabled?'btn-primary':'btn-outline'}" onclick="toggleAccount('\${encodeURIComponent(r.name)}',\${!r.disabled})">\${r.disabled?'启用':'禁用'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteAcc('\${encodeURIComponent(r.name)}')">删除</button>
+        </div>
+        \${accountDetailsHtml(r)}
       </td>
     </tr>
   \`).join('');
+  syncBatchSelectionUi();
 }
+
+async function runBatchOperation(options) {
+  const names = getSelectedNames();
+  if (!names.length) {
+    showAlert('请先选择至少一个账号', 'warning');
+    if (window.showToast) window.showToast('请先选择至少一个账号', 'warning', 3000);
+    return;
+  }
+  if (!confirm(options.confirmText.replace('{count}', String(names.length)))) return;
+
+  const buttons = ['batchMaintainBtn', 'batchEnableBtn', 'batchDeleteBtn']
+    .map(function(id) { return document.getElementById(id); })
+    .filter(Boolean);
+  buttons.forEach(function(btn) { btn.disabled = true; });
+
+  try {
+    const data = await api(options.path, {
+      method: 'POST',
+      body: JSON.stringify(options.buildBody(names)),
+    });
+    if (!data || !data.ok) {
+      const msg = (data && data.error) ? data.error : '批量操作失败';
+      showAlert(options.label + '失败：' + msg, 'danger');
+      if (window.showToast) window.showToast(options.label + '失败：' + msg, 'danger', 5000);
+      return;
+    }
+
+    const success = Number(data.success || 0);
+    const failed = Number(data.failed || 0);
+    if (options.clearOnSuccess !== false) {
+      const successfulNames = Array.isArray(data.results)
+        ? data.results.filter(function(item) { return !!item && item.ok && item.name; }).map(function(item) { return String(item.name); })
+        : names;
+      successfulNames.forEach(function(name) { selectedAccountNames.delete(name); });
+    }
+    await loadAccounts();
+    await refreshAccountMeta();
+
+    const summary = options.label + '完成：成功 ' + success + ' 个，失败 ' + failed + ' 个';
+    showAlert(summary, failed > 0 ? 'warning' : 'success');
+    if (window.showToast) window.showToast(summary, failed > 0 ? 'warning' : 'success', 5000);
+  } finally {
+    syncBatchSelectionUi();
+  }
+}
+
+async function batchMaintain() {
+  await runBatchOperation({
+    label: '批量维护',
+    path: '/accounts/batch/maintain',
+    confirmText: '确认批量维护已选择的 {count} 个账号？会立即重新探测并按当前配置执行维护逻辑。',
+    buildBody: function(names) { return { names: names }; }
+  });
+}
+
+async function batchEnable() {
+  await runBatchOperation({
+    label: '批量启用',
+    path: '/accounts/batch/toggle',
+    confirmText: '确认批量启用已选择的 {count} 个账号？',
+    buildBody: function(names) { return { names: names, disabled: false }; }
+  });
+}
+
+async function batchDelete() {
+  await runBatchOperation({
+    label: '批量删除',
+    path: '/accounts/batch/delete',
+    confirmText: '确认批量删除已选择的 {count} 个账号？此操作不可撤销！',
+    buildBody: function(names) { return { names: names }; }
+  });
+}
+
 function humanizeSingleMaintainAction(action) {
   if (action === 'disable_invalid' || action === 'mark_invalid_disabled') return '已按 401 / 失效规则禁用';
   if (action === 'delete_invalid') return '已按 401 / 失效规则删除';
@@ -806,7 +1554,10 @@ async function quickScanMaintain() {
 }
 
 syncPager();
-loadAccounts();
+syncSortUi();
+currentPageAccountNames = ${JSON.stringify(initialRows.map((r) => String(r.name || '')).filter(Boolean))};
+syncBatchSelectionUi();
+${hasInitialRows || initialTotal === 0 ? '' : 'loadAccounts();'}
 refreshAccountMeta();
 </script>
 `, 'accounts');
@@ -814,7 +1565,19 @@ refreshAccountMeta();
 
 export function operationsPage(): string {
   return htmlLayout('运维操作', `
-<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Operations center</span>
+    <h3>把高频操作收成移动端也顺手的运维中心</h3>
+    <p>扫描、维护、上传三类动作继续保留，但整体已经更像 App 内的操作中心：卡片更独立，结果区与进度条也更适合在小屏上查看。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">search</span>同步账号</span>
+    <span class="hero-chip"><span class="material-icons">build</span>维护动作</span>
+    <span class="hero-chip"><span class="material-icons">cloud_upload</span>文件上传</span>
+  </div>
+</div>
+<div class="stats-grid ops-grid">
   <div class="stat-card" id="card-scan" style="cursor:pointer" onclick="runOperation('scan')">
     <div style="display:flex;align-items:center;gap:12px">
       <span class="material-icons" id="icon-scan" style="font-size:36px;color:var(--info)">search</span>
@@ -858,10 +1621,10 @@ export function operationsPage(): string {
 
 <div id="uploadSection" style="display:none;margin-bottom:24px" class="table-wrapper">
   <div class="table-toolbar"><strong>上传账号文件</strong></div>
-  <div style="padding:20px">
-    <div style="font-size:13px;color:var(--text-dim);margin-bottom:12px">这里上传的是你已经准备好的账号 json 文件，上传成功后会直接进入当前 CPA 站点账号池。</div>
+  <div class="operations-section-body">
+    <div class="surface-note" style="margin-bottom:12px">这里上传的是你已经准备好的账号 json 文件，上传成功后会直接进入当前 CPA 站点账号池。PWA 小屏下按钮会自动堆叠，避免误触。</div>
     <input type="file" id="uploadFiles" multiple accept=".json" style="margin-bottom:12px">
-    <div style="display:flex;gap:8px">
+    <div class="inline-form">
       <button class="btn btn-primary" onclick="doUpload()"><span class="material-icons" style="font-size:16px">cloud_upload</span> 开始上传</button>
       <button class="btn btn-outline" onclick="document.getElementById('uploadSection').style.display='none'">取消</button>
     </div>
@@ -870,7 +1633,7 @@ export function operationsPage(): string {
 
 <div id="resultArea" style="display:none" class="table-wrapper">
   <div class="table-toolbar"><strong>执行结果</strong> <button class="btn btn-outline btn-sm" onclick="document.getElementById('resultArea').style.display='none'" style="margin-left:auto">关闭</button></div>
-  <div id="resultContent" style="padding:20px"></div>
+  <div id="resultContent" class="operations-section-body"></div>
 </div>
 
 <script>
@@ -913,6 +1676,7 @@ function setCardState(mode, state, detail) {
     label.textContent = ml.defaultLabel;
     desc.textContent = ml.defaultDesc;
     if (progressWrap) progressWrap.style.display = 'none';
+    if (bar) bar.classList.remove('pulse');
   } else if (state === 'running') {
     card.style.pointerEvents = 'none';
     card.style.opacity = '1';
@@ -922,6 +1686,7 @@ function setCardState(mode, state, detail) {
     desc.textContent = detail.phaseText || '处理中...';
     if (progressWrap && detail.total > 0) {
       progressWrap.style.display = 'block';
+      bar.classList.remove('pulse');
       bar.style.width = detail.percent + '%';
       progressText.textContent = detail.progress + ' / ' + detail.total + ' (' + detail.percent + '%)';
     } else if (progressWrap) {
@@ -963,11 +1728,66 @@ function setCardState(mode, state, detail) {
   }
 }
 
+function ensureRunningResult(taskId) {
+  const area = document.getElementById('resultArea');
+  const content = document.getElementById('resultContent');
+  if (!area || !content) return null;
+
+  let root = document.getElementById('liveTaskResult');
+  if (!root || root.getAttribute('data-task-id') !== String(taskId)) {
+    area.style.display = 'block';
+    content.innerHTML =
+      '<div id="liveTaskResult" data-task-id="' + taskId + '">' +
+        '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
+          '<div class="spinner" style="width:24px;height:24px;border-width:3px;flex-shrink:0"></div>' +
+          '<div>' +
+            '<div id="liveTaskPhase" style="font-size:15px;font-weight:600">处理中...</div>' +
+            '<div id="liveTaskId" style="font-size:12px;color:var(--text-dim);margin-top:2px">任务ID: ' + taskId + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;height:20px;margin-bottom:10px">' +
+          '<div id="liveTaskBar" class="progress-bar-animated" style="width:0%;height:100%;background:linear-gradient(90deg,var(--primary),var(--info));transition:width .3s"></div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-dim)">' +
+          '<span id="liveTaskProgress">进度: 0 / -</span>' +
+          '<span id="liveTaskPercent" style="font-weight:600;color:var(--text)"></span>' +
+        '</div>' +
+      '</div>';
+    root = document.getElementById('liveTaskResult');
+  }
+  return root;
+}
+
+function updateRunningResult(task, phaseText, progress, total, percent) {
+  const root = ensureRunningResult(task.id);
+  if (!root) return;
+
+  const phaseEl = document.getElementById('liveTaskPhase');
+  const idEl = document.getElementById('liveTaskId');
+  const barEl = document.getElementById('liveTaskBar');
+  const progressEl = document.getElementById('liveTaskProgress');
+  const percentEl = document.getElementById('liveTaskPercent');
+
+  if (phaseEl) phaseEl.textContent = phaseText;
+  if (idEl) idEl.textContent = '任务ID: ' + task.id;
+  if (barEl) {
+    if (total > 0) {
+      barEl.classList.remove('pulse');
+      barEl.style.width = percent + '%';
+    } else {
+      barEl.classList.add('pulse');
+      barEl.style.width = '100%';
+    }
+  }
+  if (progressEl) progressEl.textContent = '进度: ' + progress + ' / ' + (total || '-');
+  if (percentEl) percentEl.textContent = total ? (percent + '%') : '';
+}
+
 function renderEngineResult(data) {
   let html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
     '<span class="material-icons" style="font-size:32px;color:var(--success)">task_alt</span>' +
     '<div><div style="font-size:16px;font-weight:600;color:var(--success)">任务完成</div></div></div>';
-  html += '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr)">';
+  html += '<div class="stats-grid result-stats-grid">';
   html += statCard('总文件', data.total_files);
   html += statCard('过滤后', data.filtered_count);
   html += statCard('401', data.invalid_401_count, 'danger');
@@ -1045,20 +1865,7 @@ async function pollTask(taskId) {
 
   setCardState(activeMode, 'running', { phaseText: phaseText, total: total, progress: progress, percent: percent });
 
-  const html =
-    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
-      '<div class="spinner" style="width:24px;height:24px;border-width:3px;flex-shrink:0"></div>' +
-      '<div><div style="font-size:15px;font-weight:600">' + phaseText + '</div>' +
-      '<div style="font-size:12px;color:var(--text-dim);margin-top:2px">任务ID: ' + task.id + '</div></div>' +
-    '</div>' +
-    '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;height:20px;margin-bottom:10px">' +
-      '<div class="progress-bar-animated" style="width:' + percent + '%;height:100%;background:linear-gradient(90deg,var(--primary),var(--info));transition:width .3s"></div>' +
-    '</div>' +
-    '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-dim)">' +
-      '<span>进度: ' + progress + ' / ' + (total || '-') + '</span>' +
-      (total ? '<span style="font-weight:600;color:var(--text)">' + percent + '%</span>' : '') +
-    '</div>';
-  showResult(html);
+  updateRunningResult(task, phaseText, progress, total, percent);
   taskPollTimer = setTimeout(() => pollTask(taskId), 2000);
 }
 
@@ -1130,11 +1937,26 @@ function showResult(html) {
 
 export function historyPage(): string {
   return htmlLayout('扫描历史', `
-<div class="table-wrapper">
-  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <strong>扫码历史</strong>
-    <span style="font-size:12px;color:var(--text-dim)">系统默认仅保留最近 1 天扫描历史和已完成/失败任务记录，运行中的任务不会被删除。</span>
-    <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Scan history</span>
+    <h3>把扫描记录、清理入口和翻页操作整理成更适合手机的历史页</h3>
+    <p>顶部保留天数、清理按钮和记录表现在按操作区域重新分组，小屏下会自动纵向排布，不再出现一行塞满多个按钮的情况。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">history</span>扫描记录</span>
+    <span class="hero-chip"><span class="material-icons">delete_sweep</span>历史清理</span>
+    <span class="hero-chip"><span class="material-icons">insights</span>结果回看</span>
+  </div>
+</div>
+<div class="table-wrapper responsive-table">
+  <div class="table-toolbar">
+    <div class="toolbar-group toolbar-group-grow" style="align-items:flex-start">
+      <strong>扫码历史</strong>
+      <span class="section-note">系统默认仅保留最近 1 天扫描历史和已完成/失败任务记录，运行中的任务不会被删除。</span>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <div class="toolbar-group">
       <span style="font-size:12px;color:var(--text-dim)">保留天数</span>
       <input type="number" id="historyKeepDays" style="width:88px" min="1" value="1" aria-label="保留最近天数">
       <button class="btn btn-outline btn-sm" onclick="cleanupScanRunsByDays()"><span class="material-icons" style="font-size:16px">schedule</span> 清理旧扫描历史</button>
@@ -1186,12 +2008,17 @@ async function load() {
   if (!data.rows.length) { tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-dim)">暂无记录</td></tr>'; return; }
   tbody.innerHTML = data.rows.map(r => \`
     <tr>
-      <td>\${r.run_id}</td><td>\${r.mode}</td>
-      <td><span class="badge \${historyStatusBadge(r.status)}">\${r.status}</span></td>
-      <td>\${r.total_files}</td><td>\${r.filtered_files}</td><td>\${r.probed_files}</td>
-      <td>\${r.invalid_401_count}</td><td>\${r.quota_limited_count}</td><td>\${r.recovered_count}</td>
-      <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.started_at)}</td>
-      <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.finished_at)}</td>
+      <td data-label="ID">\${r.run_id}</td>
+      <td data-label="模式">\${r.mode}</td>
+      <td data-label="状态"><span class="badge \${historyStatusBadge(r.status)}">\${r.status}</span></td>
+      <td data-label="总文件">\${r.total_files}</td>
+      <td data-label="过滤">\${r.filtered_files}</td>
+      <td data-label="探测">\${r.probed_files}</td>
+      <td data-label="401">\${r.invalid_401_count}</td>
+      <td data-label="限额">\${r.quota_limited_count}</td>
+      <td data-label="恢复">\${r.recovered_count}</td>
+      <td data-label="开始时间" style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.started_at)}</td>
+      <td data-label="结束时间" style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.finished_at)}</td>
     </tr>
   \`).join('');
 }
@@ -1230,11 +2057,26 @@ load();
 
 export function activityPage(): string {
   return htmlLayout('操作日志', `
-<div class="table-wrapper">
-  <div class="table-toolbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <strong>操作日志</strong>
-    <span style="font-size:12px;color:var(--text-dim)">系统默认仅保留最近 1 天操作日志，也可以按需手动立即清理较早日志。</span>
-    <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Activity log</span>
+    <h3>操作日志页继续收紧为移动端可读、可清理、可回溯的活动视图</h3>
+    <p>日志详情、用户和时间仍然完整保留，但工具栏已经按“保留策略 + 清理动作”分组，手机端查看和清理都会更自然。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">receipt_long</span>活动记录</span>
+    <span class="hero-chip"><span class="material-icons">schedule</span>保留天数</span>
+    <span class="hero-chip"><span class="material-icons">delete_sweep</span>快速清理</span>
+  </div>
+</div>
+<div class="table-wrapper responsive-table">
+  <div class="table-toolbar">
+    <div class="toolbar-group toolbar-group-grow" style="align-items:flex-start">
+      <strong>操作日志</strong>
+      <span class="section-note">系统默认仅保留最近 1 天操作日志，也可以按需手动立即清理较早日志。</span>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <div class="toolbar-group" style="align-items:flex-end">
       <div class="form-group" style="margin:0;min-width:160px">
         <label>保留最近天数</label>
         <input type="number" id="activityKeepDays" style="width:100%" min="1" value="1">
@@ -1281,11 +2123,11 @@ async function load() {
   if (!data.rows.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-dim)">暂无记录</td></tr>'; return; }
   tbody.innerHTML = data.rows.map(r => \`
     <tr>
-      <td>\${r.id}</td>
-      <td><span class="badge badge-info">\${r.action}</span></td>
-      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${r.detail||'-'}</td>
-      <td>\${r.username||'-'}</td>
-      <td style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.created_at)}</td>
+      <td data-label="ID">\${r.id}</td>
+      <td data-label="操作"><span class="badge badge-info">\${r.action}</span></td>
+      <td data-label="详情" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${r.detail||'-'}</td>
+      <td data-label="用户">\${r.username||'-'}</td>
+      <td data-label="时间" style="white-space:nowrap;font-size:12px">\${window.formatChinaTime(r.created_at)}</td>
     </tr>
   \`).join('');
 }
@@ -1321,19 +2163,40 @@ load();
 
 export function settingsPage(): string {
   return htmlLayout('系统配置', `
-<div class="table-wrapper" style="margin-bottom:16px">
-  <div class="table-toolbar"><strong>已保存配置</strong></div>
-  <div style="padding:16px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;font-size:13px">
-    <div><span style="color:var(--text-dim)">当前 Base URL:</span><div id="saved_base_url" style="margin-top:4px;word-break:break-all">加载中...</div></div>
-    <div><span style="color:var(--text-dim)">当前 Token:</span><div id="saved_token" style="margin-top:4px;word-break:break-all">加载中...</div></div>
-    <div><span style="color:var(--text-dim)">当前 Target Type:</span><div id="saved_target_type" style="margin-top:4px">加载中...</div></div>
-    <div><span style="color:var(--text-dim)">当前 Provider:</span><div id="saved_provider" style="margin-top:4px">加载中...</div></div>
+<div class="app-page-hero">
+  <div class="app-page-hero-main">
+    <span class="hero-kicker">Settings center</span>
+    <h3>把配置页改成更像手机端“设置中心”的分组面板</h3>
+    <p>现在配置项按连接、任务参数、上传参数和安全项分成独立面板，小屏下可折叠浏览；你不需要再在一整屏桌面表单里来回找字段。</p>
+  </div>
+  <div class="hero-chip-list">
+    <span class="hero-chip"><span class="material-icons">settings</span>系统配置</span>
+    <span class="hero-chip"><span class="material-icons">tune</span>执行参数</span>
+    <span class="hero-chip"><span class="material-icons">security</span>安全项</span>
+    <span class="hero-chip"><span class="material-icons">cloud_sync</span>连接测试</span>
   </div>
 </div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
-  <div class="table-wrapper">
-    <div class="table-toolbar"><strong>CPA 连接配置</strong></div>
-    <div style="padding:20px">
+<div class="table-wrapper" style="margin-bottom:16px">
+  <div class="table-toolbar"><strong>已保存配置概览</strong></div>
+  <div class="page-grid saved-config-grid">
+    <div class="saved-config-item"><span class="saved-config-label">当前 Base URL</span><span id="saved_base_url" class="saved-config-value">加载中...</span></div>
+    <div class="saved-config-item"><span class="saved-config-label">当前 Token</span><span id="saved_token" class="saved-config-value">加载中...</span></div>
+    <div class="saved-config-item"><span class="saved-config-label">当前 Target Type</span><span id="saved_target_type" class="saved-config-value">加载中...</span></div>
+    <div class="saved-config-item"><span class="saved-config-label">当前 Provider</span><span id="saved_provider" class="saved-config-value">加载中...</span></div>
+  </div>
+</div>
+<div class="section-card-stack">
+  <details class="settings-panel" open>
+    <summary class="settings-panel-summary">
+      <span class="settings-panel-icon material-icons">cloud_sync</span>
+      <span class="settings-panel-main">
+        <span class="settings-panel-kicker">连接配置</span>
+        <span class="settings-panel-title">CPA 连接配置</span>
+        <span class="settings-panel-subtitle">集中管理 Base URL、Token、Provider 和连接测试，方便在 PWA 小屏中单独修改。</span>
+      </span>
+      <span class="material-icons settings-panel-chevron">expand_more</span>
+    </summary>
+    <div class="settings-panel-body">
       <div class="form-group">
         <label>Base URL</label>
         <input type="url" id="cfg_base_url" style="width:100%" placeholder="https://your-cpa.example.com">
@@ -1341,7 +2204,7 @@ export function settingsPage(): string {
       </div>
       <div class="form-group">
         <label>Token</label>
-        <div style="display:flex;gap:8px">
+        <div class="inline-form">
           <input type="password" id="cfg_token" style="flex:1" placeholder="输入新Token（留空则不修改）">
           <button class="btn btn-outline btn-sm" onclick="toggleTokenVisibility()" type="button"><span class="material-icons" style="font-size:16px">visibility</span></button>
         </div>
@@ -1350,18 +2213,26 @@ export function settingsPage(): string {
       <div class="form-group"><label>Target Type</label><input type="text" id="cfg_target_type" style="width:100%" value="codex"></div>
       <div class="form-group"><label>Provider (可选)</label><input type="text" id="cfg_provider" style="width:100%"></div>
       <div class="form-group"><label>User Agent</label><input type="text" id="cfg_user_agent" style="width:100%"></div>
-      <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <div class="settings-actions" style="margin-top:12px">
         <button class="btn btn-outline" onclick="testConnection()" id="testBtn"><span class="material-icons" style="font-size:16px">cable</span> 测试连接</button>
         <button class="btn btn-primary" onclick="saveSettings()" id="saveBtn"><span class="material-icons" style="font-size:16px">save</span> 保存配置</button>
         <span id="testResult" style="font-size:13px"></span>
         <span id="saveResult" style="font-size:13px"></span>
       </div>
     </div>
-  </div>
-  <div class="table-wrapper">
-    <div class="table-toolbar"><strong>探测 & 维护参数</strong></div>
-    <div style="padding:20px">
-      <div style="margin-bottom:14px;font-size:12px;color:var(--text-dim)">并发参数会参与实际执行，但 Worker 端会应用安全上限以避免把 CPA 接口或 Cloudflare 运行时打满。当前上限：探测 12，维护操作 10。</div>
+  </details>
+  <details class="settings-panel" open>
+    <summary class="settings-panel-summary">
+      <span class="settings-panel-icon material-icons">tune</span>
+      <span class="settings-panel-main">
+        <span class="settings-panel-kicker">任务参数</span>
+        <span class="settings-panel-title">探测 & 维护参数</span>
+        <span class="settings-panel-subtitle">配置定时任务、并发、安全阈值和恢复策略，面板会自动适配手机端折叠阅读。</span>
+      </span>
+      <span class="material-icons settings-panel-chevron">expand_more</span>
+    </summary>
+    <div class="settings-panel-body">
+      <div class="surface-note" style="margin-bottom:14px">并发参数会参与实际执行，但 Worker 端会应用安全上限以避免把 CPA 接口或 Cloudflare 运行时打满。当前上限：探测 12，维护操作 10。</div>
       <div class="form-row">
         <div class="form-group">
           <label>执行频率 Cron (UTC)</label>
@@ -1411,11 +2282,19 @@ export function settingsPage(): string {
         <div class="form-group"><label>自动恢复</label><select id="cfg_auto_reenable" style="width:100%"><option value="true">是</option><option value="false">否</option></select></div>
       </div>
     </div>
-  </div>
-  <div class="table-wrapper">
-    <div class="table-toolbar"><strong>上传参数</strong></div>
-    <div style="padding:20px">
-      <div style="margin-bottom:14px;font-size:12px;color:var(--text-dim)">上传并发同样参与实际执行，但会受到 Worker 端安全上限约束。当前上限：上传 8。</div>
+  </details>
+  <details class="settings-panel" open>
+    <summary class="settings-panel-summary">
+      <span class="settings-panel-icon material-icons">upload_file</span>
+      <span class="settings-panel-main">
+        <span class="settings-panel-kicker">上传策略</span>
+        <span class="settings-panel-title">上传参数</span>
+        <span class="settings-panel-subtitle">上传并发、重试和补充策略单独放到一个面板，手机端更适合分区查看。</span>
+      </span>
+      <span class="material-icons settings-panel-chevron">expand_more</span>
+    </summary>
+    <div class="settings-panel-body">
+      <div class="surface-note" style="margin-bottom:14px">上传并发同样参与实际执行，但会受到 Worker 端安全上限约束。当前上限：上传 8。</div>
       <div class="form-row">
         <div class="form-group"><label>上传并发</label><input type="number" id="cfg_upload_workers" style="width:100%" min="1"></div>
         <div class="form-group"><label>上传重试</label><input type="number" id="cfg_upload_retries" style="width:100%" min="0"></div>
@@ -1429,16 +2308,24 @@ export function settingsPage(): string {
         <div class="form-group"><label>补充策略</label><select id="cfg_refill_strategy" style="width:100%"><option value="to-threshold">to-threshold</option><option value="fixed">fixed</option></select></div>
       </div>
     </div>
-  </div>
-  <div class="table-wrapper">
-    <div class="table-toolbar"><strong>修改密码</strong></div>
-    <div style="padding:20px">
+  </details>
+  <details class="settings-panel">
+    <summary class="settings-panel-summary">
+      <span class="settings-panel-icon material-icons">security</span>
+      <span class="settings-panel-main">
+        <span class="settings-panel-kicker">安全项</span>
+        <span class="settings-panel-title">修改密码</span>
+        <span class="settings-panel-subtitle">把账号安全相关项独立出来，减少和业务参数混在一起时的阅读负担。</span>
+      </span>
+      <span class="material-icons settings-panel-chevron">expand_more</span>
+    </summary>
+    <div class="settings-panel-body">
       <div class="form-group"><label>旧密码</label><input type="password" id="old_password" style="width:100%"></div>
       <div class="form-group"><label>新密码</label><input type="password" id="new_password" style="width:100%"></div>
       <button class="btn btn-outline" onclick="changePassword()">修改密码</button>
       <div id="pwResult" style="margin-top:8px"></div>
     </div>
-  </div>
+  </details>
 </div>
 <script>
 const configFields = ['base_url','token','target_type','provider','user_agent','cron_enabled','cron_expression','probe_workers','action_workers','timeout','retries','delete_retries','quota_action','quota_disable_threshold','reenable_scope','delete_401','auto_reenable','upload_workers','upload_retries','upload_method','upload_force','min_valid_accounts','refill_strategy'];
