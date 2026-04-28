@@ -13,6 +13,7 @@ data/
 *.db
 *.db-shm
 *.db-wal
+*.db.bak-*
 
 # Local development config
 docker-compose.yml
